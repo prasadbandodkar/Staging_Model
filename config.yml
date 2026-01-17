@@ -1,0 +1,78 @@
+# ==============================================================================
+# Staging Model Configuration
+# ==============================================================================
+
+# Data Configuration
+data:
+  path: "/Volumes/X2/Projects/phd/staging/data/live_data"
+  metadata_path: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
+  test_ids: [21, 22]
+  val_ids: [6, 34]
+  ppm: null
+
+  # Image dimensions (final size after preprocessing)
+  img_height: 1024
+  img_width: 1024
+  
+  # Preprocessing
+  padding: 44
+  npoints: 60
+  
+  # Nuclear layer boundary extension - Different for cross-section vs sagittal
+  # Folders 6_ and 7_ are sagittal images; all others are cross-section
+  boundary_extension:
+    cross_section:
+      outward: -20    # Negative → extends outward → outer edge
+      inward: 44      # Positive → extends inward → inner edge
+    sagittal:
+      outward: -30    # TODO: Adjust this value for sagittal images
+      inward: 34      # TODO: Adjust this value for sagittal images
+  
+  # Define which folder prefixes are sagittal (all others are cross-section)
+  sagittal_folder_prefixes: [6, 7]
+  
+  trunc_width: 128
+  image_type: "unrolled"  # Options: original, segmented, nuclear_layer, unrolled
+  num_workers: 0
+
+
+# Model Configuration
+model:
+  model_type: "nano"  # Options: nano, tiny, small, medium, large
+  dropout: 0.25
+  summary: false
+
+
+# Training Configuration
+training:
+  batch_size: 512
+  epochs: 100
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  
+  # Loss function
+  loss_type: "huber"  # Options: mse, smooth_l1, huber
+  huber_delta: 1.0
+  
+  grad_clip: 0.0
+  
+  # Learning rate scheduler
+  lr_factor: 0.1
+  lr_patience: 5
+  
+  early_stopping: 100
+  checkpoint_dir: "./checkpoints"
+  debug: false
+
+
+# Run Management
+runs:
+  base_dir: "./runs"
+  auto_name: true
+  save_config: true
+  tensorboard_enabled: true
+
+
+# Global Settings
+seed: 42
+cpu: false
