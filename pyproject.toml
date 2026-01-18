@@ -16,10 +16,35 @@ dependencies = [
     "scikit-image>=0.21.0",
     "matplotlib>=3.7.0",
     "pandas>=2.0.0",
-    "tqdm>=4.67.1",
     "pyyaml>=6.0.0",
     "tensorboard>=2.20.0",
+    "tqdm>=4.65.0",
 ]
+
+[project.optional-dependencies]
+cuda118 = []  # Empty, but triggers the index-url for torch/torchvision
+cuda121 = []  # Empty, but triggers the index-url for torch/torchvision
+
+[tool.uv.sources]
+# Use PyTorch's custom index for CUDA builds (markers must be disjoint)
+torch = [
+    { index = "pytorch-cu118", marker = "extra == 'cuda118'" },
+    { index = "pytorch-cu121", marker = "extra != 'cuda118' and extra == 'cuda121'" },
+]
+torchvision = [
+    { index = "pytorch-cu118", marker = "extra == 'cuda118'" },
+    { index = "pytorch-cu121", marker = "extra != 'cuda118' and extra == 'cuda121'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

@@ -118,7 +118,8 @@ class Trainer:
         val_loader: DataLoader,
         config: TrainingConfig,
         device: torch.device,
-        logger=None
+        logger=None,
+        use_tqdm: bool = True
     ):
         """
         Initialize trainer.
@@ -130,6 +131,7 @@ class Trainer:
             config: Training configuration object
             device: Device to train on (cpu or cuda)
             logger: Optional TensorBoardLogger instance
+            use_tqdm: Whether to use tqdm progress bars
         """
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -137,6 +139,7 @@ class Trainer:
         self.config = config
         self.device = device
         self.logger = logger
+        self.use_tqdm = use_tqdm
         
         # Loss function
         self.criterion = self._get_loss_function()
@@ -218,8 +221,12 @@ class Trainer:
         self.model.train()
         metrics = MetricsTracker()
         
-        pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} [Train]")
-        for batch_idx, (images, targets, folder_ids) in enumerate(pbar):
+        if self.use_tqdm:
+            iterator = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} [Train]")
+        else:
+            iterator = self.train_loader
+            
+        for batch_idx, (images, targets, folder_ids) in enumerate(iterator):
             # Move to device (convert to float32 first for MPS compatibility)
             images = images.float().to(self.device)
             targets = targets.float().unsqueeze(1).to(self.device)
@@ -245,7 +252,8 @@ class Trainer:
             metrics.update(loss.item(), predictions, targets)
             
             # Update progress bar
-            pbar.set_postfix({'loss': loss.item()})
+            if self.use_tqdm:
+                iterator.set_postfix({'loss': loss.item()})
         
         return metrics.compute()
     
@@ -260,8 +268,12 @@ class Trainer:
         metrics = MetricsTracker()
         
         with torch.no_grad():
-            pbar = tqdm(self.val_loader, desc=f"Epoch {self.current_epoch + 1} [Val]")
-            for images, targets, folder_ids in pbar:
+            if self.use_tqdm:
+                iterator = tqdm(self.val_loader, desc=f"Epoch {self.current_epoch + 1} [Val]")
+            else:
+                iterator = self.val_loader
+                
+            for images, targets, folder_ids in iterator:
                 # Move to device (convert to float32 first for MPS compatibility)
                 images = images.float().to(self.device)
                 targets = targets.float().unsqueeze(1).to(self.device)
@@ -274,7 +286,8 @@ class Trainer:
                 metrics.update(loss.item(), predictions, targets)
                 
                 # Update progress bar
-                pbar.set_postfix({'loss': loss.item()})
+                if self.use_tqdm:
+                    iterator.set_postfix({'loss': loss.item()})
         
         return metrics.compute()
     
@@ -647,7 +660,8 @@ def train_model(cfg: AppConfig, resume_from: str = None, run_name: str = None):
         val_loader=val_loader,
         config=cfg.training,
         device=device,
-        logger=logger
+        logger=logger,
+        use_tqdm=cfg.runs.use_tqdm
     )
     
     # Resume from checkpoint if specified

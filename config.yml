@@ -4,8 +4,8 @@
 
 # Data Configuration
 data:
-  path: "/Volumes/X2/Projects/phd/staging/data/live_data"
-  metadata_path: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
+  path: "/scratch/user/prasad.bandodkar/staging/live_data"
+  metadata_path: "/scratch/user/prasad.bandodkar/staging/Staging_Model/metadata.csv"
   test_ids: [21, 22]
   val_ids: [6, 34]
   ppm: null
@@ -71,6 +71,7 @@ runs:
   auto_name: true
   save_config: true
   tensorboard_enabled: true
+  use_tqdm: false
 
 
 # Global Settings
