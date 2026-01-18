@@ -160,4 +160,13 @@ def main():
 
 
 if __name__ == "__main__":
+    # Fix for macOS: Use 'spawn' instead of 'fork' for multiprocessing
+    # Critical when using DataLoader with num_workers > 0 on Apple Silicon (MPS)
+    import torch.multiprocessing as mp
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        # Already set, ignore
+        pass
+
     main()

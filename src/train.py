@@ -24,7 +24,7 @@ from tqdm import tqdm
 
 # Import local modules
 from .model import Model, create_staging_model, get_model_summary
-from .data import TorchDataset
+from .torchdataset import TorchDataset
 from .config import AppConfig, TrainingConfig, DataConfig, ModelConfig
 from .run_manager import RunManager
 
@@ -433,10 +433,8 @@ class Trainer:
                 best_mae = f"{self.history['val_mae'][self.best_val_epoch]:.6f}"
             
             print(f"\nEpoch {epoch + 1}/{num_epochs}")
-            print(f"  Train - Loss: {train_metrics['loss']:.6f}, "
-                  f"MAE: {train_metrics['mae']:.6f}, R²: {train_metrics['r2']:.4f}")
-            print(f"  Val   - Loss: {val_metrics['loss']:.6f}, "
-                  f"MAE: {val_metrics['mae']:.6f}, R²: {val_metrics['r2']:.4f}")
+            print(f"  Train - Loss: {train_metrics['loss']:.6f}, MAE: {train_metrics['mae']:.6f}, R²: {train_metrics['r2']:.4f}")
+            print(f"  Val   - Loss: {val_metrics['loss']:.6f}, MAE: {val_metrics['mae']:.6f}, R²: {val_metrics['r2']:.4f}")
             print(f"  Best  - Loss: {self.best_val_loss:.6f}, MAE: {best_mae} (Epoch {self.best_val_epoch + 1})")
             print(f"  LR: {current_lr:.2e}")
             
@@ -553,7 +551,8 @@ def create_dataloaders(cfg: AppConfig, device: torch.device):
         trunc_width=cfg.data.trunc_width,
         image_type=cfg.data.image_type,
         metadata_path=cfg.data.metadata_path,
-        target_ppm=cfg.data.ppm
+        target_ppm=cfg.data.ppm,
+        data_augment=cfg.data.data_augment
     )
     
     val_dataset = TorchDataset(
@@ -569,7 +568,8 @@ def create_dataloaders(cfg: AppConfig, device: torch.device):
         trunc_width=cfg.data.trunc_width,
         image_type=cfg.data.image_type,
         metadata_path=cfg.data.metadata_path,
-        target_ppm=cfg.data.ppm
+        target_ppm=cfg.data.ppm,
+        data_augment=cfg.data.data_augment
     )
     
     print(f"Train dataset size: {len(train_dataset)}")
@@ -581,15 +581,15 @@ def create_dataloaders(cfg: AppConfig, device: torch.device):
         batch_size=cfg.training.batch_size,
         shuffle=True,
         num_workers=cfg.data.num_workers,
-        pin_memory=True if device.type == 'cuda' else False
+        pin_memory=True if device.type in ['cuda', 'mps'] else False
     )
-    
+
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=cfg.training.batch_size,
         shuffle=False,
         num_workers=cfg.data.num_workers,
-        pin_memory=True if device.type == 'cuda' else False
+        pin_memory=True if device.type in ['cuda', 'mps'] else False
     )
     
     return train_loader, val_loader, train_dataset, val_dataset

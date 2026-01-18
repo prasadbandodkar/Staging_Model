@@ -44,6 +44,8 @@ class DataConfig:
                    - 'segmented': Binary segmentation mask of entire embryo
                    - 'nuclear_layer': Binary mask of nuclear layer region (not unrolled)
                    - 'unrolled': Unrolled nuclear layer with optional width truncation (recommended)
+        data_augment: When true, randomly interpolate between adjacent images during training.
+                     When false, load images directly from disk without interpolation.
         num_workers: Number of data loading workers (typically set to number of CPU cores, or 0 for single-threaded)
     """
     path: str
@@ -59,6 +61,7 @@ class DataConfig:
     sagittal_folder_prefixes: List[int]
     trunc_width: Optional[int]
     image_type: Literal['original', 'segmented', 'nuclear_layer', 'unrolled']
+    data_augment: bool
     num_workers: int
     
     def __post_init__(self):
@@ -136,7 +139,6 @@ class TrainingConfig:
         lr_patience: Number of epochs with no improvement before reducing LR
         early_stopping: Stop training if validation loss doesn't improve for this many epochs
         checkpoint_dir: Directory where model checkpoints will be saved
-        debug: Debug mode (runs for only 2 epochs with minimal batch size)
     """
     batch_size: int
     epochs: int
@@ -149,7 +151,6 @@ class TrainingConfig:
     lr_patience: int
     early_stopping: int
     checkpoint_dir: str
-    debug: bool
 
 @dataclass
 class AppConfig:

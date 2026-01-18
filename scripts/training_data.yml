@@ -1,0 +1,22 @@
+# ==============================================================================
+# Training Data Preparation Configuration
+# ==============================================================================
+
+# Source data directory
+data_path: "/Volumes/X2/Projects/phd/staging/data/live_data"
+
+# Output directory for prepared data
+output_path: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented"
+
+# Number of synthetic images to generate per adjacent image pair
+# Higher values = more augmented data but longer processing time
+num_augmentations: 10
+
+# Test folder IDs (these will be copied without augmentation)
+test_ids: [21, 22]
+
+# Validation folder IDs (these will be copied without augmentation)
+val_ids: [6, 34]
+
+# Random seed for reproducibility
+seed: 42

@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from .config import AppConfig
 from .model import create_staging_model
-from .data import TorchDataset
+from .torchdataset import TorchDataset
 from .train import set_seed, get_device
 
 
@@ -58,7 +58,8 @@ def test_model(cfg: AppConfig, checkpoint_path: str, test_on: str = 'both', fold
             boundary_extension=cfg.data.boundary_extension,
             sagittal_folder_prefixes=cfg.data.sagittal_folder_prefixes,
             trunc_width=cfg.data.trunc_width,
-            image_type=cfg.data.image_type
+            image_type=cfg.data.image_type,
+            data_augment=cfg.data.data_augment
         )
         datasets_to_combine.append(custom_dataset)
         dataset_names.append(f"Custom (folders: {folders})")
@@ -78,7 +79,8 @@ def test_model(cfg: AppConfig, checkpoint_path: str, test_on: str = 'both', fold
                 boundary_extension=cfg.data.boundary_extension,
                 sagittal_folder_prefixes=cfg.data.sagittal_folder_prefixes,
                 trunc_width=cfg.data.trunc_width,
-                image_type=cfg.data.image_type
+                image_type=cfg.data.image_type,
+                data_augment=cfg.data.data_augment
             )
             datasets_to_combine.append(test_dataset)
             dataset_names.append(f"Test (folders: {cfg.data.test_ids})")
@@ -96,7 +98,8 @@ def test_model(cfg: AppConfig, checkpoint_path: str, test_on: str = 'both', fold
                 boundary_extension=cfg.data.boundary_extension,
                 sagittal_folder_prefixes=cfg.data.sagittal_folder_prefixes,
                 trunc_width=cfg.data.trunc_width,
-                image_type=cfg.data.image_type
+                image_type=cfg.data.image_type,
+                data_augment=cfg.data.data_augment
             )
             datasets_to_combine.append(val_dataset)
             dataset_names.append(f"Val (folders: {cfg.data.val_ids})")

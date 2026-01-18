@@ -4,7 +4,7 @@
 
 # Data Configuration
 data:
-  path: "/Volumes/X2/Projects/phd/staging/data/live_data"
+  path: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented"
   metadata_path: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
   test_ids: [21, 22]
   val_ids: [6, 34]
@@ -33,6 +33,7 @@ data:
   
   trunc_width: 128
   image_type: "unrolled"  # Options: original, segmented, nuclear_layer, unrolled
+  data_augment: false  # When true, randomly interpolate between adjacent images for training
   num_workers: 0
 
 
@@ -40,7 +41,7 @@ data:
 model:
   model_type: "nano"  # Options: nano, tiny, small, medium, large
   dropout: 0.25
-  summary: false
+  summary: true
 
 
 # Training Configuration
@@ -55,14 +56,13 @@ training:
   huber_delta: 1.0
   
   grad_clip: 0.0
-  
+
   # Learning rate scheduler
-  lr_factor: 0.1
+  lr_factor: 0.5
   lr_patience: 5
-  
+
   early_stopping: 100
   checkpoint_dir: "./checkpoints"
-  debug: false
 
 
 # Run Management

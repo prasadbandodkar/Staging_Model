@@ -75,7 +75,8 @@ This project implements an end-to-end machine learning pipeline for developmenta
 ### Requirements
 
 - Python ≥ 3.11
-- CUDA-capable GPU (recommended, but CPU mode available)
+- GPU recommended: NVIDIA GPU with CUDA support, or Apple Silicon with MPS
+- CPU-only mode also available
 
 ### Setup
 
@@ -90,33 +91,42 @@ This project implements an end-to-end machine learning pipeline for developmenta
 2. **Install PyTorch** (platform-specific):
 
    **For Linux with NVIDIA GPUs (CUDA 11.8)**:
-   
+
    ```bash
    uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
    ```
-   
+
    **For Linux with NVIDIA GPUs (CUDA 12.1)**:
-   
+
    ```bash
    uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
    ```
-   
-   **For macOS or CPU-only systems**:
-   
+
+   **For macOS with Apple Silicon (M1/M2/M3) - MPS acceleration**:
+
    ```bash
-   # Skip this step - PyTorch will be installed from PyPI in the next step
+   uv pip install torch torchvision
    ```
-   
-   > **Note**: Check your CUDA version with `nvidia-smi` and visit [pytorch.org](https://pytorch.org/get-started/locally/) for the latest installation commands.
+
+   **For macOS Intel or CPU-only systems**:
+
+   ```bash
+   uv pip install torch torchvision
+   ```
+
+   > **Note**:
+   > - Check your CUDA version with `nvidia-smi` on Linux
+   > - MPS (Metal Performance Shaders) provides GPU acceleration on Apple Silicon Macs
+   > - Visit [pytorch.org](https://pytorch.org/get-started/locally/) for the latest installation commands
 
 3. **Install remaining dependencies**:
 
    Using `uv`:
-   
+
    ```bash
    uv pip install -e .
    ```
-   
+
    Or using standard pip:
 
    ```bash
@@ -125,16 +135,36 @@ This project implements an end-to-end machine learning pipeline for developmenta
 
 4. **Verify installation**:
 
+   Run the verification script to check all dependencies and GPU acceleration:
 
+   ```bash
+   python verify_installation.py
+   ```
+
+   This will verify:
+   - Python version
+   - PyTorch installation and version
+   - GPU acceleration (CUDA/MPS/CPU)
+   - All required dependencies
+
+   You can also verify manually:
 
    ```bash
    python main.py --help
    ```
 
-   **Verify GPU is available** (on Linux with NVIDIA GPUs):
+   **Check GPU acceleration** (platform-specific):
+
+   For NVIDIA GPUs:
 
    ```bash
    python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+   ```
+
+   For Apple Silicon:
+
+   ```bash
+   python -c "import torch; print(f'MPS available: {torch.backends.mps.is_available()}')"
    ```
 
 ### Dependencies
@@ -876,9 +906,17 @@ data:
 
 **Solutions**:
 
+For NVIDIA GPUs:
+
 - Verify CUDA installation: `python -c "import torch; print(torch.cuda.is_available())"`
 - Update GPU drivers
 - Reinstall PyTorch with CUDA: `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118`
+
+For Apple Silicon:
+
+- Verify MPS availability: `python -c "import torch; print(torch.backends.mps.is_available())"`
+- Ensure you're running on macOS 12.3+ with Apple Silicon (M1/M2/M3)
+- If MPS is not available, the code will automatically fall back to CPU
 
 #### 4. Poor Training Performance
 

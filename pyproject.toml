@@ -19,32 +19,31 @@ dependencies = [
     "pyyaml>=6.0.0",
     "tensorboard>=2.20.0",
     "tqdm>=4.65.0",
+    "kornia>=0.7.0",
 ]
+
+# Installation instructions:
+# =======================
+#
+# For CUDA support (Linux with NVIDIA GPUs):
+#   CUDA 11.8: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#   CUDA 12.1: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#   Then: uv pip install -e .
+#
+# For MPS support (macOS with Apple Silicon M1/M2/M3):
+#   uv pip install torch torchvision
+#   Then: uv pip install -e .
+#
+# For CPU-only (macOS Intel or systems without GPU):
+#   uv pip install torch torchvision
+#   Then: uv pip install -e .
+#
+# The code automatically detects and uses available hardware acceleration:
+#   Priority: CUDA > MPS > CPU
 
 [project.optional-dependencies]
 cuda118 = []  # Empty, but triggers the index-url for torch/torchvision
 cuda121 = []  # Empty, but triggers the index-url for torch/torchvision
-
-[tool.uv.sources]
-# Use PyTorch's custom index for CUDA builds (markers must be disjoint)
-torch = [
-    { index = "pytorch-cu118", marker = "extra == 'cuda118'" },
-    { index = "pytorch-cu121", marker = "extra != 'cuda118' and extra == 'cuda121'" },
-]
-torchvision = [
-    { index = "pytorch-cu118", marker = "extra == 'cuda118'" },
-    { index = "pytorch-cu121", marker = "extra != 'cuda118' and extra == 'cuda121'" },
-]
-
-[[tool.uv.index]]
-name = "pytorch-cu118"
-url = "https://download.pytorch.org/whl/cu118"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu121"
-url = "https://download.pytorch.org/whl/cu121"
-explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
