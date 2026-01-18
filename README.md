@@ -86,34 +86,37 @@ This project implements an end-to-end machine learning pipeline for developmenta
    cd Staging_Model
    ```
 
+
 2. **Install PyTorch** (platform-specific):
 
-   **For Linux with NVIDIA GPUs** (CUDA 11.8):
-
+   **For Linux with NVIDIA GPUs (CUDA 11.8)**:
+   
    ```bash
    uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
    ```
-
-   **For Linux with NVIDIA GPUs** (CUDA 12.1):
-
+   
+   **For Linux with NVIDIA GPUs (CUDA 12.1)**:
+   
    ```bash
    uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
    ```
-
+   
    **For macOS or CPU-only systems**:
-
+   
    ```bash
    # Skip this step - PyTorch will be installed from PyPI in the next step
    ```
-
+   
    > **Note**: Check your CUDA version with `nvidia-smi` and visit [pytorch.org](https://pytorch.org/get-started/locally/) for the latest installation commands.
 
-3. **Install remaining dependencies using `uv`**:
+3. **Install remaining dependencies**:
 
+   Using `uv`:
+   
    ```bash
    uv pip install -e .
    ```
-
+   
    Or using standard pip:
 
    ```bash
@@ -121,6 +124,8 @@ This project implements an end-to-end machine learning pipeline for developmenta
    ```
 
 4. **Verify installation**:
+
+
 
    ```bash
    python main.py --help
