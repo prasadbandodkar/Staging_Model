@@ -50,3 +50,14 @@ cd $SCRATCH/staging/Staging_Model
 uv run --extra cuda121 python main.py --mode train
 
 echo "Job finished at $(date)"
+
+# Move output and error files to the latest run directory
+# Find the latest run directory (sorted by time)
+LATEST_RUN=$(ls -td runs/run_* | head -1)
+
+if [ -d "$LATEST_RUN" ]; then
+    echo "Moving log files to $LATEST_RUN"
+    # Move and rename with .txt extension (avoiding collision)
+    mv "runs/staging_${SLURM_JOB_ID}.out" "$LATEST_RUN/staging_${SLURM_JOB_ID}_out.txt"
+    mv "runs/staging_${SLURM_JOB_ID}.err" "$LATEST_RUN/staging_${SLURM_JOB_ID}_err.txt"
+fi
