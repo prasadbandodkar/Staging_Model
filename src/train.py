@@ -323,8 +323,25 @@ class Trainer:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         self.current_epoch = checkpoint['epoch']
+        self.history = checkpoint.get('history', self.history)
+        
         self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
         self.best_val_epoch = checkpoint.get('best_val_epoch', 0)
+        
+        # Recover best_val_epoch from history if it wasn't saved (older checkpoints)
+        if self.best_val_epoch == 0 and self.best_val_loss < float('inf') and len(self.history['val_loss']) > 0:
+            try:
+                # Assuming val_loss list aligns with epochs 0, 1, 2...
+                # We need to be careful if history grows during training and we look for min locally
+                # But typically history stores all epochs.
+                val_losses = self.history['val_loss']
+                self.best_val_epoch = np.argmin(val_losses)
+                # Verify consistency
+                if abs(val_losses[self.best_val_epoch] - self.best_val_loss) > 1e-6:
+                    print(f"Warning: Saved best_val_loss ({self.best_val_loss}) differs from min history loss ({val_losses[self.best_val_epoch]}). Using history min.")
+                    self.best_val_loss = val_losses[self.best_val_epoch]
+            except Exception as e:
+                print(f"Warning: Could not recover best epoch from history: {e}")
         # Try to restore config as dataclass if possible, but keep dict if loading old checkpoints
         loaded_config = checkpoint.get('config', {})
         if isinstance(loaded_config, dict):
@@ -411,12 +428,16 @@ class Trainer:
                 self.epochs_without_improvement += 1
             
             # Print epoch summary
+            best_mae = "N/A"
+            if self.history['val_mae'] and len(self.history['val_mae']) > self.best_val_epoch:
+                best_mae = f"{self.history['val_mae'][self.best_val_epoch]:.6f}"
+            
             print(f"\nEpoch {epoch + 1}/{num_epochs}")
             print(f"  Train - Loss: {train_metrics['loss']:.6f}, "
                   f"MAE: {train_metrics['mae']:.6f}, R²: {train_metrics['r2']:.4f}")
             print(f"  Val   - Loss: {val_metrics['loss']:.6f}, "
                   f"MAE: {val_metrics['mae']:.6f}, R²: {val_metrics['r2']:.4f}")
-            print(f"  Best  - Loss: {self.best_val_loss:.6f} (Epoch {self.best_val_epoch + 1})")
+            print(f"  Best  - Loss: {self.best_val_loss:.6f}, MAE: {best_mae} (Epoch {self.best_val_epoch + 1})")
             print(f"  LR: {current_lr:.2e}")
             
             # Save checkpoint
@@ -430,7 +451,7 @@ class Trainer:
         
         print("\n" + "=" * 80)
         print("Training complete!")
-        print(f"Best validation loss: {self.best_val_loss:.6f}")
+        print(f"Best validation loss: {self.best_val_loss:.6f} (Epoch {self.best_val_epoch + 1})")
         
         # Save training history
         history_path = self.checkpoint_dir / 'training_history.json'
