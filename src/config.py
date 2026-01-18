@@ -117,7 +117,7 @@ class RunsConfig:
     auto_name: bool
     save_config: bool
     tensorboard_enabled: bool
-    use_tqdm: bool
+
 
 @dataclass
 class TrainingConfig:

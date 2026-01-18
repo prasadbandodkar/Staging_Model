@@ -118,8 +118,7 @@ class Trainer:
         val_loader: DataLoader,
         config: TrainingConfig,
         device: torch.device,
-        logger=None,
-        use_tqdm: bool = True
+        logger=None
     ):
         """
         Initialize trainer.
@@ -131,7 +130,6 @@ class Trainer:
             config: Training configuration object
             device: Device to train on (cpu or cuda)
             logger: Optional TensorBoardLogger instance
-            use_tqdm: Whether to use tqdm progress bars
         """
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -139,7 +137,6 @@ class Trainer:
         self.config = config
         self.device = device
         self.logger = logger
-        self.use_tqdm = use_tqdm
         
         # Loss function
         self.criterion = self._get_loss_function()
@@ -162,6 +159,7 @@ class Trainer:
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
+        self.best_val_epoch = 0
         self.epochs_without_improvement = 0
         
         # Checkpointing
@@ -221,10 +219,7 @@ class Trainer:
         self.model.train()
         metrics = MetricsTracker()
         
-        if self.use_tqdm:
-            iterator = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} [Train]")
-        else:
-            iterator = self.train_loader
+        iterator = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} [Train]")
             
         for batch_idx, (images, targets, folder_ids) in enumerate(iterator):
             # Move to device (convert to float32 first for MPS compatibility)
@@ -252,8 +247,7 @@ class Trainer:
             metrics.update(loss.item(), predictions, targets)
             
             # Update progress bar
-            if self.use_tqdm:
-                iterator.set_postfix({'loss': loss.item()})
+            iterator.set_postfix({'loss': loss.item()})
         
         return metrics.compute()
     
@@ -268,10 +262,7 @@ class Trainer:
         metrics = MetricsTracker()
         
         with torch.no_grad():
-            if self.use_tqdm:
-                iterator = tqdm(self.val_loader, desc=f"Epoch {self.current_epoch + 1} [Val]")
-            else:
-                iterator = self.val_loader
+            iterator = tqdm(self.val_loader, desc=f"Epoch {self.current_epoch + 1} [Val]")
                 
             for images, targets, folder_ids in iterator:
                 # Move to device (convert to float32 first for MPS compatibility)
@@ -286,8 +277,7 @@ class Trainer:
                 metrics.update(loss.item(), predictions, targets)
                 
                 # Update progress bar
-                if self.use_tqdm:
-                    iterator.set_postfix({'loss': loss.item()})
+                iterator.set_postfix({'loss': loss.item()})
         
         return metrics.compute()
     
@@ -310,6 +300,7 @@ class Trainer:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
             'best_val_loss': self.best_val_loss,
+            'best_val_epoch': self.best_val_epoch,
             'history': self.history,
             'config': asdict(self.config) if hasattr(self.config, '__dataclass_fields__') else self.config
         }
@@ -332,6 +323,8 @@ class Trainer:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         self.current_epoch = checkpoint['epoch']
+        self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        self.best_val_epoch = checkpoint.get('best_val_epoch', 0)
         # Try to restore config as dataclass if possible, but keep dict if loading old checkpoints
         loaded_config = checkpoint.get('config', {})
         if isinstance(loaded_config, dict):
@@ -408,21 +401,23 @@ class Trainer:
                 if epoch % 5 == 0:
                     self._log_sample_predictions(epoch)
             
+            # Check for improvement
+            is_best = val_metrics['loss'] < self.best_val_loss
+            if is_best:
+                self.best_val_loss = val_metrics['loss']
+                self.best_val_epoch = self.current_epoch
+                self.epochs_without_improvement = 0
+            else:
+                self.epochs_without_improvement += 1
+            
             # Print epoch summary
             print(f"\nEpoch {epoch + 1}/{num_epochs}")
             print(f"  Train - Loss: {train_metrics['loss']:.6f}, "
                   f"MAE: {train_metrics['mae']:.6f}, R²: {train_metrics['r2']:.4f}")
             print(f"  Val   - Loss: {val_metrics['loss']:.6f}, "
                   f"MAE: {val_metrics['mae']:.6f}, R²: {val_metrics['r2']:.4f}")
+            print(f"  Best  - Loss: {self.best_val_loss:.6f} (Epoch {self.best_val_epoch + 1})")
             print(f"  LR: {current_lr:.2e}")
-            
-            # Check for improvement
-            is_best = val_metrics['loss'] < self.best_val_loss
-            if is_best:
-                self.best_val_loss = val_metrics['loss']
-                self.epochs_without_improvement = 0
-            else:
-                self.epochs_without_improvement += 1
             
             # Save checkpoint
             self.save_checkpoint(is_best=is_best)
@@ -660,8 +655,7 @@ def train_model(cfg: AppConfig, resume_from: str = None, run_name: str = None):
         val_loader=val_loader,
         config=cfg.training,
         device=device,
-        logger=logger,
-        use_tqdm=cfg.runs.use_tqdm
+        logger=logger
     )
     
     # Resume from checkpoint if specified
