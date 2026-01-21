@@ -1,79 +1,160 @@
 # ==============================================================================
 # Staging Model Configuration
 # ==============================================================================
+# This config supports both regression and classification tasks.
+# Set task.type to switch between modes.
+# ==============================================================================
 
-# Data Configuration
+# ==============================================================================
+# TASK CONFIGURATION
+# ==============================================================================
+# Defines the learning task: regression or classification
+task:
+  type: "classification"  # Options: regression, classification
+
+  # Classification settings (only used when type=classification)
+  # Note: Regression IDs from id.csv are automatically binned into classes
+  # Example for num_classes=2: [0.0, 0.5) → class 0, [0.5, 1.0] → class 1
+  # Example for num_classes=5: [0.0, 0.2) → class 0, [0.2, 0.4) → class 1, etc.
+  classification:
+    num_classes: 5  # Number of classes (IDs are binned into equal intervals)
+    class_names: null  # Optional: ["stage1", "stage2", ...] for logging
+
+
+# ==============================================================================
+# DATA CONFIGURATION
+# ==============================================================================
 data:
-  path: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented"
-  metadata_path: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
-  test_ids: [21, 22]
-  val_ids: [6, 34]
-  ppm: null
+  # --- Paths ---
+  paths:
+    root: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented/"
+    metadata: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
 
-  # Image dimensions (final size after preprocessing)
-  img_height: 1024
-  img_width: 1024
-  
-  # Preprocessing
-  padding: 44
-  npoints: 60
-  
-  # Nuclear layer boundary extension - Different for cross-section vs sagittal
-  # Folders 6_ and 7_ are sagittal images; all others are cross-section
-  boundary_extension:
-    cross_section:
-      outward: -20    # Negative → extends outward → outer edge
-      inward: 44      # Positive → extends inward → inner edge
-    sagittal:
-      outward: -30    # TODO: Adjust this value for sagittal images
-      inward: 34      # TODO: Adjust this value for sagittal images
-  
-  # Define which folder prefixes are sagittal (all others are cross-section)
-  sagittal_folder_prefixes: [6, 7]
-  
-  trunc_width: 128
-  image_type: "unrolled"  # Options: original, segmented, nuclear_layer, unrolled
-  data_augment: false  # When true, randomly interpolate between adjacent images for training
-  num_workers: 0
+  # --- Dataset Splits ---
+  splits:
+    test_ids: [40, 42]
+    val_ids: [6, 34]
+    # train_ids are automatically determined (all folders not in test/val)
+
+  # --- Data Loading ---
+  loading:
+    use_preprocessed: true  # Load pre-processed images (bypass CVImage preprocessing)
+                            # When true: images are already unrolled, only trunc_width applied
+                            # When false: full preprocessing pipeline runs (see preprocessing section)
+                            # Requires: augmentation.interpolation.enabled=false
+
+    trunc_width: 128  # Width truncation/cropping applied during loading
+                      # Training: random crop, Validation: center crop
+                      # Set to null to disable truncation
+
+    num_workers: 4  # Number of dataloader workers (0 = single-threaded)
+
+  # --- Data Augmentation ---
+  augmentation:
+    enabled: false  # Enable/disable all augmentation
+
+    # Interpolation augmentation (randomly blend adjacent images)
+    interpolation:
+      enabled: false  # When true, randomly interpolate between adjacent images
+      distribution: "uniform"  # Options: uniform, beta
+      beta_alpha: 0.5  # Alpha parameter for Beta distribution
+      beta_beta: 0.5   # Beta parameter for Beta distribution
+
+  # --- Image Preprocessing (only used when loading.use_preprocessed=false) ---
+  preprocessing:
+    # Target dimensions
+    img_height: 1024
+    img_width: 1024
+    padding: 44
+
+    # Image type to use for training
+    image_type: "unrolled"  # Options: original, segmented, nuclear_layer, unrolled
+
+    # Unrolling parameters
+    npoints: 60  # Number of points for contour representation
+
+    # Nuclear layer boundary extension (different for cross-section vs sagittal)
+    boundary_extension:
+      cross_section:
+        outward: -20  # Negative → extends outward (away from center) → outer edge
+        inward: 44    # Positive → extends inward (toward center) → inner edge
+      sagittal:
+        outward: -30
+        inward: 34
+
+    # Folder classification
+    sagittal_folder_prefixes: [6, 7, 40, 41, 42, 43]
+
+    # PPM normalization
+    target_ppm: null  # Target pixels-per-micron (null = no normalization)
 
 
-# Model Configuration
+# ==============================================================================
+# MODEL CONFIGURATION
+# ==============================================================================
 model:
-  model_type: "nano"  # Options: nano, tiny, small, medium, large
-  dropout: 0.25
-  summary: true
+  architecture: "nano"  # Options: nano, tiny, small, medium, large
+                         # nano:   <150k params
+                         # tiny:   ~700k params
+                         # small:  ~11M params (ResNet18-like)
+                         # medium: ~25M params (ResNet34-like)
+                         # large:  ~45M params (ResNet101-like)
+
+  dropout: 0.25  # Dropout rate for regularization
+  show_summary: true  # Print model summary at startup
 
 
-# Training Configuration
+# ==============================================================================
+# TRAINING CONFIGURATION
+# ==============================================================================
 training:
+  # --- Optimization ---
+  optimizer:
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-4  # L2 regularization
+
+  # --- Loss Function ---
+  loss:
+    # Regression losses: mse, smooth_l1, huber
+    # Classification losses: cross_entropy (auto-selected based on task.type)
+    type: "cross_entropy"
+
+    # Huber loss parameters (only used if type=huber)
+    huber_delta: 1.0
+
+  # --- Learning Rate Scheduler ---
+  scheduler:
+    type: "reduce_on_plateau"  # Currently only this type supported
+    factor: 0.5      # Multiply LR by this when reducing
+    patience: 5      # Epochs with no improvement before reducing LR
+
+  # --- Regularization ---
+  regularization:
+    grad_clip: 0.0  # Gradient clipping (0.0 = disabled)
+
+  # --- Training Duration ---
   batch_size: 128
   epochs: 100
-  learning_rate: 1.0e-4
-  weight_decay: 1.0e-4
-  
-  # Loss function
-  loss_type: "huber"  # Options: mse, smooth_l1, huber
-  huber_delta: 1.0
-  
-  grad_clip: 0.0
+  early_stopping: 100  # Stop if no improvement for N epochs (0 = disabled)
 
-  # Learning rate scheduler
-  lr_factor: 0.5
-  lr_patience: 5
-
-  early_stopping: 100
-  checkpoint_dir: "./checkpoints"
+  # --- Checkpointing ---
+  checkpoint_dir: "./checkpoints"  # Relative to run directory
 
 
-# Run Management
+# ==============================================================================
+# RUN MANAGEMENT
+# ==============================================================================
 runs:
   base_dir: "./runs"
-  auto_name: true
-  save_config: true
+  auto_name: true  # Auto-generate timestamp-based run names
+  save_config: true  # Save config snapshot in run directory
   tensorboard_enabled: true
 
 
-
-# Global Settings
-seed: 42
-cpu: false
+# ==============================================================================
+# SYSTEM SETTINGS
+# ==============================================================================
+system:
+  seed: 42  # Random seed for reproducibility
+  device: "auto"  # Options: auto, cuda, mps, cpu
+                  # auto = use GPU if available, else CPU

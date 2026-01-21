@@ -32,75 +32,86 @@ from .run_manager import RunManager
 
 class MetricsTracker:
     """
-    Track and compute training metrics for regression tasks.
-    
-    This tracker accumulates predictions and targets over an epoch to calculate:
-    
-    1. **MSE (Mean Squared Error)**: 
-       - Measures the average squared difference between estimated values and the actual value.
-       - heavily penalizes large errors (e.g., being off by 0.5 is 4x worse than 0.25).
-       - Context: Important for the optimizer, but less intuitive for humans.
-       
-    2. **MAE (Mean Absolute Error)**: 
-       - The average of the absolute differences between predictions and targets.
-       - Context: Extremely intuitive. "On average, our staging prediction is off by X". 
-       - For staging (0-1), an MAE of 0.05 means we are accurate within 5% of the range.
-       
-    3. **R² Score (Coefficient of Determination)**:
-       - Statistical measure of how well the regression predictions approximate the real data points.
-       - Range: (-∞, 1.0]. 
-         * 1.0 = Perfect prediction.
-         * 0.0 = Model just predicts the mean of the target.
-         * Negative = Model performs worse than a horizontal line.
-       - Context: The standard industry metric for "goodness of fit".
-       
-    4. **Loss**:
-       - The raw value from the optimization objective functions (e.g. MSE, Huber).
-       - Context: Used to track convergence stability.
+    Track and compute training metrics for regression or classification tasks.
+
+    For regression, computes:
+    - MSE (Mean Squared Error)
+    - MAE (Mean Absolute Error)
+    - R² Score (Coefficient of Determination)
+    - Loss
+
+    For classification, computes:
+    - Accuracy (percentage of correct predictions)
+    - Loss
     """
-    
-    def __init__(self):
+
+    def __init__(self, task_type: str = 'regression'):
+        """
+        Initialize metrics tracker.
+
+        Args:
+            task_type: 'regression' or 'classification'
+        """
+        self.task_type = task_type
         self.reset()
-    
+
     def reset(self):
         """Reset all metrics."""
         self.losses = []
         self.predictions = []
         self.targets = []
-    
+
     def update(self, loss: float, predictions: torch.Tensor, targets: torch.Tensor):
         """Update metrics with new batch."""
         self.losses.append(loss)
         # Store on CPU to save GPU memory. Use torch for final computation.
         self.predictions.append(predictions.detach().cpu())
         self.targets.append(targets.detach().cpu())
-    
+
     def compute(self) -> Dict[str, float]:
         """Compute aggregated metrics."""
-        # Concatenate all batches efficiently
-        preds = torch.cat(self.predictions).flatten()
-        targs = torch.cat(self.targets).flatten()
-        
-        # Mean Squared Error
-        mse = torch.mean((preds - targs) ** 2).item()
-        
-        # Mean Absolute Error
-        mae = torch.mean(torch.abs(preds - targs)).item()
-        
-        # R² Score
-        ss_res = torch.sum((targs - preds) ** 2)
-        ss_tot = torch.sum((targs - torch.mean(targs)) ** 2)
-        r2 = (1 - (ss_res / (ss_tot + 1e-8))).item()
-        
         # Average loss
         avg_loss = np.mean(self.losses)
-        
-        return {
-            'loss': avg_loss,
-            'mse': mse,
-            'mae': mae,
-            'r2': r2
-        }
+
+        if self.task_type == 'regression':
+            # Concatenate all batches efficiently
+            preds = torch.cat(self.predictions).flatten()
+            targs = torch.cat(self.targets).flatten()
+
+            # Mean Squared Error
+            mse = torch.mean((preds - targs) ** 2).item()
+
+            # Mean Absolute Error
+            mae = torch.mean(torch.abs(preds - targs)).item()
+
+            # R² Score
+            ss_res = torch.sum((targs - preds) ** 2)
+            ss_tot = torch.sum((targs - torch.mean(targs)) ** 2)
+            r2 = (1 - (ss_res / (ss_tot + 1e-8))).item()
+
+            return {
+                'loss': avg_loss,
+                'mse': mse,
+                'mae': mae,
+                'r2': r2
+            }
+        else:  # classification
+            # Concatenate all batches
+            preds = torch.cat(self.predictions)  # (N, num_classes) logits
+            targs = torch.cat(self.targets).long()  # (N,) class indices
+
+            # Get predicted classes
+            pred_classes = torch.argmax(preds, dim=1)
+
+            # Accuracy
+            correct = (pred_classes == targs).sum().item()
+            total = targs.size(0)
+            accuracy = correct / total
+
+            return {
+                'loss': avg_loss,
+                'accuracy': accuracy
+            }
 
 
 
@@ -118,17 +129,19 @@ class Trainer:
         val_loader: DataLoader,
         config: TrainingConfig,
         device: torch.device,
+        task_type: str = 'regression',
         logger=None
     ):
         """
         Initialize trainer.
-        
+
         Args:
             model: PyTorch model to train
             train_loader: DataLoader for training data
             val_loader: DataLoader for validation data
             config: Training configuration object
             device: Device to train on (cpu or cuda)
+            task_type: Task type ('regression' or 'classification')
             logger: Optional TensorBoardLogger instance
         """
         self.model = model.to(device)
@@ -136,149 +149,169 @@ class Trainer:
         self.val_loader = val_loader
         self.config = config
         self.device = device
+        self.task_type = task_type
         self.logger = logger
-        
+
         # Loss function
         self.criterion = self._get_loss_function()
-        
+
         # Optimizer
         self.optimizer = optim.AdamW(
             self.model.parameters(),
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay
+            lr=config.optimizer.learning_rate,
+            weight_decay=config.optimizer.weight_decay
         )
-        
+
         # Learning rate scheduler
         self.scheduler = ReduceLROnPlateau(
             self.optimizer,
             mode='min',
-            factor=config.lr_factor,
-            patience=config.lr_patience
+            factor=config.scheduler.factor,
+            patience=config.scheduler.patience
         )
-        
+
         # Training state
         self.current_epoch = 0
         self.best_val_loss = float('inf')
         self.best_val_epoch = 0
         self.epochs_without_improvement = 0
-        
+
         # Checkpointing
         self.checkpoint_dir = Path(config.checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
-        # History
-        self.history = {
-            'train_loss': [],
-            'train_mae': [],
-            'train_r2': [],
-            'val_loss': [],
-            'val_mae': [],
-            'val_r2': [],
-            'learning_rates': []
-        }
+
+        # History (task-specific)
+        if self.task_type == 'regression':
+            self.history = {
+                'train_loss': [],
+                'train_mae': [],
+                'train_r2': [],
+                'val_loss': [],
+                'val_mae': [],
+                'val_r2': [],
+                'learning_rates': []
+            }
+        else:  # classification
+            self.history = {
+                'train_loss': [],
+                'train_accuracy': [],
+                'val_loss': [],
+                'val_accuracy': [],
+                'learning_rates': []
+            }
     
     def _get_loss_function(self) -> nn.Module:
         """
-        Get loss function based on config.
-        
-        Selection Guide:
-        
+        Get loss function based on config and task type.
+
+        For Regression:
         1. **MSE (Mean Squared Error)**:
-           - *Standard default* for regression.
-           - heavily penalizes outliers (large errors squared).
-           - Best when you want the model to pay extra attention to getting "hard" examples right,
-             assuming the labels are clean and correct.
-             
+           - Standard default for regression
+           - Heavily penalizes outliers (large errors squared)
+
         2. **Smooth L1 / Huber**:
-           - *Robust regression*.
-           - Behave like MSE near zero (for precision) but like L1 (absolute error) 
-             for large errors.
-           - Best when your dataset might have some noisy labels or outliers that shouldn't
-             distort the model too much.
-             
-        For Staging (0-1 regression), MSE is typically the best starting point.
+           - Robust regression
+           - Behave like MSE near zero but like L1 for large errors
+
+        For Classification:
+        - **CrossEntropyLoss**: Standard for multi-class classification
         """
-        loss_type = self.config.loss_type
-        
+        if self.task_type == 'classification':
+            # For classification, always use CrossEntropyLoss
+            return nn.CrossEntropyLoss()
+
+        # For regression, use configured loss type
+        loss_type = self.config.loss.type
+
         if loss_type == 'mse':
             return nn.MSELoss()
         elif loss_type == 'smooth_l1':
             return nn.SmoothL1Loss()
         elif loss_type == 'huber':
-            return nn.HuberLoss(delta=self.config.huber_delta)
+            return nn.HuberLoss(delta=self.config.loss.huber_delta)
         else:
             raise ValueError(f"Unknown loss type: {loss_type}")
     
     def train_epoch(self) -> Dict[str, float]:
         """
         Train for one epoch.
-        
+
         Returns:
             Dictionary of training metrics
         """
         self.model.train()
-        metrics = MetricsTracker()
-        
+        metrics = MetricsTracker(task_type=self.task_type)
+
         iterator = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} [Train]")
-            
+
         for batch_idx, (images, targets, folder_ids) in enumerate(iterator):
             # Move to device (convert to float32 first for MPS compatibility)
             images = images.float().to(self.device)
-            targets = targets.float().unsqueeze(1).to(self.device)
-            
+
+            # Prepare targets based on task type
+            if self.task_type == 'regression':
+                targets = targets.float().unsqueeze(1).to(self.device)
+            else:  # classification
+                targets = targets.long().to(self.device)  # CrossEntropyLoss expects Long
+
             # Forward pass
             self.optimizer.zero_grad()
             predictions = self.model(images)
             loss = self.criterion(predictions, targets)
-            
+
             # Backward pass
             loss.backward()
-            
+
             # Gradient clipping
-            if self.config.grad_clip > 0:
+            if self.config.regularization.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), 
-                    self.config.grad_clip
+                    self.model.parameters(),
+                    self.config.regularization.grad_clip
                 )
-            
+
             self.optimizer.step()
-            
+
             # Update metrics
             metrics.update(loss.item(), predictions, targets)
-            
+
             # Update progress bar
             iterator.set_postfix({'loss': loss.item()})
-        
+
         return metrics.compute()
     
     def validate(self) -> Dict[str, float]:
         """
         Validate the model.
-        
+
         Returns:
             Dictionary of validation metrics
         """
         self.model.eval()
-        metrics = MetricsTracker()
-        
+        metrics = MetricsTracker(task_type=self.task_type)
+
         with torch.no_grad():
             iterator = tqdm(self.val_loader, desc=f"Epoch {self.current_epoch + 1} [Val]")
-                
+
             for images, targets, folder_ids in iterator:
                 # Move to device (convert to float32 first for MPS compatibility)
                 images = images.float().to(self.device)
-                targets = targets.float().unsqueeze(1).to(self.device)
-                
+
+                # Prepare targets based on task type
+                if self.task_type == 'regression':
+                    targets = targets.float().unsqueeze(1).to(self.device)
+                else:  # classification
+                    targets = targets.long().to(self.device)
+
                 # Forward pass
                 predictions = self.model(images)
                 loss = self.criterion(predictions, targets)
-                
+
                 # Update metrics
                 metrics.update(loss.item(), predictions, targets)
-                
+
                 # Update progress bar
                 iterator.set_postfix({'loss': loss.item()})
-        
+
         return metrics.compute()
     
     def save_checkpoint(self, is_best: bool = False):
@@ -401,23 +434,28 @@ class Trainer:
             
             # Update history
             self.history['train_loss'].append(train_metrics['loss'])
-            self.history['train_mae'].append(train_metrics['mae'])
-            self.history['train_r2'].append(train_metrics['r2'])
             self.history['val_loss'].append(val_metrics['loss'])
-            self.history['val_mae'].append(val_metrics['mae'])
-            self.history['val_r2'].append(val_metrics['r2'])
             self.history['learning_rates'].append(current_lr)
-            
+
+            if self.task_type == 'regression':
+                self.history['train_mae'].append(train_metrics['mae'])
+                self.history['train_r2'].append(train_metrics['r2'])
+                self.history['val_mae'].append(val_metrics['mae'])
+                self.history['val_r2'].append(val_metrics['r2'])
+            else:  # classification
+                self.history['train_accuracy'].append(train_metrics['accuracy'])
+                self.history['val_accuracy'].append(val_metrics['accuracy'])
+
             # Log to TensorBoard
             if self.logger:
                 self.logger.log_metrics(train_metrics, epoch, prefix='train/')
                 self.logger.log_metrics(val_metrics, epoch, prefix='val/')
                 self.logger.log_learning_rate(current_lr, epoch)
-                
+
                 # Log sample predictions every 5 epochs
                 if epoch % 5 == 0:
                     self._log_sample_predictions(epoch)
-            
+
             # Check for improvement
             is_best = val_metrics['loss'] < self.best_val_loss
             if is_best:
@@ -426,16 +464,26 @@ class Trainer:
                 self.epochs_without_improvement = 0
             else:
                 self.epochs_without_improvement += 1
-            
-            # Print epoch summary
-            best_mae = "N/A"
-            if self.history['val_mae'] and len(self.history['val_mae']) > self.best_val_epoch:
-                best_mae = f"{self.history['val_mae'][self.best_val_epoch]:.6f}"
-            
+
+            # Print epoch summary (task-specific)
             print(f"\nEpoch {epoch + 1}/{num_epochs}")
-            print(f"  Train - Loss: {train_metrics['loss']:.6f}, MAE: {train_metrics['mae']:.6f}, R²: {train_metrics['r2']:.4f}")
-            print(f"  Val   - Loss: {val_metrics['loss']:.6f}, MAE: {val_metrics['mae']:.6f}, R²: {val_metrics['r2']:.4f}")
-            print(f"  Best  - Loss: {self.best_val_loss:.6f}, MAE: {best_mae} (Epoch {self.best_val_epoch + 1})")
+            if self.task_type == 'regression':
+                best_mae = "N/A"
+                if self.history['val_mae'] and len(self.history['val_mae']) > self.best_val_epoch:
+                    best_mae = f"{self.history['val_mae'][self.best_val_epoch]:.6f}"
+
+                print(f"  Train - Loss: {train_metrics['loss']:.6f}, MAE: {train_metrics['mae']:.6f}, R²: {train_metrics['r2']:.4f}")
+                print(f"  Val   - Loss: {val_metrics['loss']:.6f}, MAE: {val_metrics['mae']:.6f}, R²: {val_metrics['r2']:.4f}")
+                print(f"  Best  - Loss: {self.best_val_loss:.6f}, MAE: {best_mae} (Epoch {self.best_val_epoch + 1})")
+            else:  # classification
+                best_acc = "N/A"
+                if self.history['val_accuracy'] and len(self.history['val_accuracy']) > self.best_val_epoch:
+                    best_acc = f"{self.history['val_accuracy'][self.best_val_epoch]:.4f}"
+
+                print(f"  Train - Loss: {train_metrics['loss']:.6f}, Accuracy: {train_metrics['accuracy']:.4f}")
+                print(f"  Val   - Loss: {val_metrics['loss']:.6f}, Accuracy: {val_metrics['accuracy']:.4f}")
+                print(f"  Best  - Loss: {self.best_val_loss:.6f}, Accuracy: {best_acc} (Epoch {self.best_val_epoch + 1})")
+
             print(f"  LR: {current_lr:.2e}")
             
             # Save checkpoint
@@ -458,11 +506,18 @@ class Trainer:
         
         # Log final hyperparameters and metrics
         if self.logger:
-            final_metrics = {
-                'final/best_val_loss': self.best_val_loss,
-                'final/best_val_mae': min(self.history['val_mae']),
-                'final/best_val_r2': max(self.history['val_r2'])
-            }
+            if self.task_type == 'regression':
+                final_metrics = {
+                    'final/best_val_loss': self.best_val_loss,
+                    'final/best_val_mae': min(self.history['val_mae']),
+                    'final/best_val_r2': max(self.history['val_r2'])
+                }
+            else:  # classification
+                final_metrics = {
+                    'final/best_val_loss': self.best_val_loss,
+                    'final/best_val_accuracy': max(self.history['val_accuracy'])
+                }
+
             self.logger.log_hyperparameters(
                 hparams={'config': asdict(self.config)},
                 metrics=final_metrics
@@ -503,84 +558,109 @@ def set_seed(seed: int):
 
 
 
-def get_device(force_cpu: bool = False) -> torch.device:
+def get_device(device_config: str = 'auto') -> torch.device:
     """
-    Get the best available device.
-    
+    Get the device based on configuration.
+
     Args:
-        force_cpu: If True, force CPU usage
-        
+        device_config: Device configuration ('auto', 'cpu', 'cuda', or 'mps')
+
     Returns:
         torch.device object
     """
-    if force_cpu:
+    if device_config == 'cpu':
         return torch.device('cpu')
-    elif torch.cuda.is_available():
+    elif device_config == 'cuda':
+        if not torch.cuda.is_available():
+            print("Warning: CUDA requested but not available. Using CPU.")
+            return torch.device('cpu')
         return torch.device('cuda')
-    elif torch.backends.mps.is_available():
+    elif device_config == 'mps':
+        if not torch.backends.mps.is_available():
+            print("Warning: MPS requested but not available. Using CPU.")
+            return torch.device('cpu')
         return torch.device('mps')
+    elif device_config == 'auto':
+        if torch.cuda.is_available():
+            return torch.device('cuda')
+        elif torch.backends.mps.is_available():
+            return torch.device('mps')
+        else:
+            return torch.device('cpu')
     else:
-        return torch.device('cpu')
+        raise ValueError(f"Unknown device config: {device_config}. Choose from: auto, cpu, cuda, mps")
 
 
 
 def create_dataloaders(cfg: AppConfig, device: torch.device):
     """
     Create training and validation dataloaders.
-    
+
     Args:
         cfg: Application configuration
         device: Device to use for training
-        
+
     Returns:
         Tuple of (train_loader, val_loader, train_dataset, val_dataset)
     """
     print("\nLoading datasets...")
-    
+
     # Create datasets
     train_dataset = TorchDataset(
-        path=cfg.data.path,
-        test=cfg.data.test_ids,
-        val=cfg.data.val_ids,
+        path=cfg.data.paths.root,
+        test=cfg.data.splits.test_ids,
+        val=cfg.data.splits.val_ids,
         type='train',
-        size=(cfg.data.img_height, cfg.data.img_width),
-        padding=cfg.data.padding,
-        npoints=cfg.data.npoints,
-        boundary_extension=cfg.data.boundary_extension,
-        sagittal_folder_prefixes=cfg.data.sagittal_folder_prefixes,
-        trunc_width=cfg.data.trunc_width,
-        image_type=cfg.data.image_type,
-        metadata_path=cfg.data.metadata_path,
-        target_ppm=cfg.data.ppm,
-        data_augment=cfg.data.data_augment
+        size=(cfg.data.preprocessing.img_height, cfg.data.preprocessing.img_width),
+        padding=cfg.data.preprocessing.padding,
+        npoints=cfg.data.preprocessing.npoints,
+        boundary_extension=cfg.data.preprocessing.boundary_extension,
+        sagittal_folder_prefixes=cfg.data.preprocessing.sagittal_folder_prefixes,
+        trunc_width=cfg.data.loading.trunc_width,
+        image_type=cfg.data.preprocessing.image_type,
+        metadata_path=cfg.data.paths.metadata,
+        target_ppm=cfg.data.preprocessing.target_ppm,
+        data_augment=cfg.data.augmentation.interpolation.enabled,
+        use_preprocessed=cfg.data.loading.use_preprocessed,
+        augment_distribution=cfg.data.augmentation.interpolation.distribution,
+        augment_beta_alpha=cfg.data.augmentation.interpolation.beta_alpha,
+        augment_beta_beta=cfg.data.augmentation.interpolation.beta_beta,
+        task_type=cfg.task.type,
+        num_classes=cfg.task.classification.num_classes
     )
-    
+
     val_dataset = TorchDataset(
-        path=cfg.data.path,
-        test=cfg.data.test_ids,
-        val=cfg.data.val_ids,
+        path=cfg.data.paths.root,
+        test=cfg.data.splits.test_ids,
+        val=cfg.data.splits.val_ids,
         type='val',
-        size=(cfg.data.img_height, cfg.data.img_width),
-        padding=cfg.data.padding,
-        npoints=cfg.data.npoints,
-        boundary_extension=cfg.data.boundary_extension,
-        sagittal_folder_prefixes=cfg.data.sagittal_folder_prefixes,
-        trunc_width=cfg.data.trunc_width,
-        image_type=cfg.data.image_type,
-        metadata_path=cfg.data.metadata_path,
-        target_ppm=cfg.data.ppm,
-        data_augment=cfg.data.data_augment
+        size=(cfg.data.preprocessing.img_height, cfg.data.preprocessing.img_width),
+        padding=cfg.data.preprocessing.padding,
+        npoints=cfg.data.preprocessing.npoints,
+        boundary_extension=cfg.data.preprocessing.boundary_extension,
+        sagittal_folder_prefixes=cfg.data.preprocessing.sagittal_folder_prefixes,
+        trunc_width=cfg.data.loading.trunc_width,
+        image_type=cfg.data.preprocessing.image_type,
+        metadata_path=cfg.data.paths.metadata,
+        target_ppm=cfg.data.preprocessing.target_ppm,
+        data_augment=cfg.data.augmentation.interpolation.enabled,
+        use_preprocessed=cfg.data.loading.use_preprocessed,
+        augment_distribution=cfg.data.augmentation.interpolation.distribution,
+        augment_beta_alpha=cfg.data.augmentation.interpolation.beta_alpha,
+        augment_beta_beta=cfg.data.augmentation.interpolation.beta_beta,
+        task_type=cfg.task.type,
+        num_classes=cfg.task.classification.num_classes
     )
-    
+
     print(f"Train dataset size: {len(train_dataset)}")
     print(f"Validation dataset size: {len(val_dataset)}")
-    
+
     # Create data loaders
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=cfg.training.batch_size,
         shuffle=True,
-        num_workers=cfg.data.num_workers,
+        num_workers=cfg.data.loading.num_workers,
         pin_memory=True if device.type in ['cuda', 'mps'] else False
     )
 
@@ -588,10 +668,10 @@ def create_dataloaders(cfg: AppConfig, device: torch.device):
         val_dataset,
         batch_size=cfg.training.batch_size,
         shuffle=False,
-        num_workers=cfg.data.num_workers,
+        num_workers=cfg.data.loading.num_workers,
         pin_memory=True if device.type in ['cuda', 'mps'] else False
     )
-    
+
     return train_loader, val_loader, train_dataset, val_dataset
 
 
@@ -632,34 +712,39 @@ def train_model(cfg: AppConfig, resume_from: str = None, run_name: str = None):
         run_manager.save_config(cfg)
     
     # Set random seed
-    set_seed(cfg.seed)
-    
+    set_seed(cfg.system.seed)
+
     # Get device
-    device = get_device(cfg.cpu)
+    device = get_device(cfg.system.device)
     print(f"Using device: {device}")
+    print(f"Task type: {cfg.task.type}")
+    if cfg.task.type == 'classification':
+        print(f"Number of classes: {cfg.task.classification.num_classes}")
     print("\nConfiguration loaded from config.yml")
-    
+
     # Create dataloaders
     train_loader, val_loader, _, _ = create_dataloaders(cfg, device)
-    
+
     # Create model
     print("\nCreating model...")
     model = create_staging_model(
-        model_type=cfg.model.model_type,
+        model_type=cfg.model.architecture,
         in_channels=1,
-        dropout_rate=cfg.model.dropout
+        dropout_rate=cfg.model.dropout,
+        task_type=cfg.task.type,
+        num_classes=cfg.task.classification.num_classes
     )
-    
+
     # Print model summary if requested
-    if cfg.model.summary:
+    if cfg.model.show_summary:
         get_model_summary(
-            model, 
-            (cfg.training.batch_size, 1, cfg.data.img_height, cfg.data.img_width)
+            model,
+            (cfg.training.batch_size, 1, cfg.data.preprocessing.img_height, cfg.data.preprocessing.img_width)
         )
-    
+
     # Update training config to use run-specific checkpoint directory
     cfg.training.checkpoint_dir = str(run_manager.get_checkpoint_dir())
-    
+
     # Initialize TensorBoard logger if enabled
     logger = None
     if cfg.runs.tensorboard_enabled:
@@ -668,7 +753,7 @@ def train_model(cfg: AppConfig, resume_from: str = None, run_name: str = None):
             log_dir=str(run_manager.get_logs_dir()),
             enabled=True
         )
-    
+
     # Create trainer
     trainer = Trainer(
         model=model,
@@ -676,6 +761,7 @@ def train_model(cfg: AppConfig, resume_from: str = None, run_name: str = None):
         val_loader=val_loader,
         config=cfg.training,
         device=device,
+        task_type=cfg.task.type,
         logger=logger
     )
     

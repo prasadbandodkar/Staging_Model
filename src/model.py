@@ -87,30 +87,38 @@ class ResidualBlock(nn.Module):
 
 class Model(nn.Module):
     """
-    ResNet-style CNN for regression on nuclear layer images.
-    
-    Predicts a continuous staging value between 0 and 1 from grayscale images.
+    ResNet-style CNN for regression or classification on nuclear layer images.
+
+    For regression: Predicts a continuous staging value between 0 and 1.
+    For classification: Predicts class probabilities for discrete staging classes.
     Designed to handle variable-width inputs through adaptive pooling.
     """
-    
+
     def __init__(
-        self, 
+        self,
         in_channels: int = 1,
         base_channels: int = 64,
         num_blocks: Tuple[int, int, int, int] = (2, 2, 2, 2),
-        dropout_rate: float = 0.5
+        dropout_rate: float = 0.5,
+        task_type: str = 'regression',
+        num_classes: int = 1
     ):
         """
         Initialize the model.
-        
+
         Args:
             in_channels: Number of input channels (default: 1 for grayscale)
             base_channels: Number of filters in the first layer (default: 64).
                            Controls the width of the entire network.
             num_blocks: Number of residual blocks in each layer (default: (2,2,2,2))
             dropout_rate: Dropout probability for regularization (default: 0.5)
+            task_type: Task type ('regression' or 'classification')
+            num_classes: Number of output classes (only used for classification)
         """
         super(Model, self).__init__()
+
+        self.task_type = task_type
+        self.num_classes = num_classes
         
         self.in_channels = base_channels
         
@@ -136,12 +144,18 @@ class Model(nn.Module):
         
         # Adaptive pooling to handle variable-width inputs
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        
-        # Regression head
+
+        # Task-specific output head
         self.fc1 = nn.Linear(c4, 128)
         self.dropout = nn.Dropout(p=dropout_rate)
-        self.fc2 = nn.Linear(128, 1)
-        
+
+        if self.task_type == 'regression':
+            # Regression: single output with sigmoid activation
+            self.fc2 = nn.Linear(128, 1)
+        else:
+            # Classification: num_classes outputs (no activation, CrossEntropyLoss expects logits)
+            self.fc2 = nn.Linear(128, self.num_classes)
+
         # Initialize weights
         self._initialize_weights()
         
@@ -217,38 +231,42 @@ class Model(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass through the model.
-        
+
         Args:
             x: Input tensor of shape (B, C, H, W)
-            
+
         Returns:
-            Predicted staging values of shape (B, 1) in range [0, 1]
+            For regression: Predicted staging values of shape (B, 1) in range [0, 1]
+            For classification: Logits of shape (B, num_classes)
         """
         # Initial conv + pooling
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = self.maxpool(x)
-        
+
         # ResNet layers
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        
+
         # Global pooling
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
-        
-        # Regression head
+
+        # Output head
         x = self.fc1(x)
         x = self.relu(x)
         x = self.dropout(x)
         x = self.fc2(x)
-        
-        # Sigmoid to constrain output to [0, 1]
-        x = torch.sigmoid(x)
-        
+
+        # Task-specific activation
+        if self.task_type == 'regression':
+            # Sigmoid to constrain output to [0, 1]
+            x = torch.sigmoid(x)
+        # For classification, return logits (no activation)
+
         return x
 
 
@@ -256,23 +274,27 @@ def create_staging_model(
     model_type: str = 'small',
     in_channels: int = 1,
     dropout_rate: float = 0.5,
+    task_type: str = 'regression',
+    num_classes: int = 1,
     base_channels: Optional[int] = None,
     num_blocks: Optional[Tuple[int, int, int, int]] = None
 ) -> Model:
     """
     Factory function to create different model variants.
-    
+
     Args:
         model_type: Model size ('nano', 'tiny', 'small', 'medium', 'large')
         in_channels: Number of input channels (default: 1)
         dropout_rate: Dropout probability (default: 0.5)
-        base_channels: Optional override for base channel count/width. 
+        task_type: Task type ('regression' or 'classification')
+        num_classes: Number of output classes (only used for classification)
+        base_channels: Optional override for base channel count/width.
                        If None, derived from model_type defaults.
         num_blocks: Optional override for residual blocks structure.
-        
+
     Returns:
         Initialized Model
-        
+
     Raises:
         ValueError: If model_type is not recognized
     """
@@ -284,24 +306,26 @@ def create_staging_model(
         'medium': (64, (3, 4, 6, 3)), # ~25M params (ResNet34-ish)
         'large':  (64, (3, 4, 23, 3)) # ResNet101-ish depth
     }
-    
+
     if model_type not in model_configs:
         raise ValueError(
             f"Unknown model_type '{model_type}'. "
             f"Choose from: {list(model_configs.keys())}"
         )
-    
+
     default_channels, default_blocks = model_configs[model_type]
-    
+
     # Use overrides if provided, otherwise defaults
     final_channels = base_channels if base_channels is not None else default_channels
     final_blocks = num_blocks if num_blocks is not None else default_blocks
-    
+
     return Model(
         in_channels=in_channels,
         base_channels=final_channels,
         num_blocks=final_blocks,
-        dropout_rate=dropout_rate
+        dropout_rate=dropout_rate,
+        task_type=task_type,
+        num_classes=num_classes
     )
 
 
