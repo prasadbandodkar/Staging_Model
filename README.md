@@ -57,8 +57,8 @@ This project implements an end-to-end machine learning pipeline for developmenta
 - **ResNet Architecture**: Multiple model sizes (nano, tiny, small, medium, large) for different computational budgets
 - **Flexible Loss Functions**: Support for MSE, Smooth L1, and Huber loss
 - **Advanced Training**: Gradient clipping, learning rate scheduling, and early stopping
-- **Comprehensive Metrics**: Tracks MSE, MAE, RMSE, and R² score during training and validation
-- **Data Augmentation**: Random interpolation between adjacent images for synthetic training samples
+- **Comprehensive Metrics**: Tracks MSE, MAE, and R² score during training and validation
+- **Data Augmentation**: Random interpolation between adjacent images using Beta(0.5, 0.5) distribution for synthetic training samples
 
 ### Experiment Management
 
@@ -74,7 +74,7 @@ This project implements an end-to-end machine learning pipeline for developmenta
 
 ### Requirements
 
-- Python ≥ 3.11
+- Python ≥ 3.11 (managed automatically by uv - no system Python required)
 - GPU recommended: NVIDIA GPU with CUDA support, or Apple Silicon with MPS
 - CPU-only mode also available
 
@@ -87,26 +87,63 @@ This project implements an end-to-end machine learning pipeline for developmenta
    cd Staging_Model
    ```
 
+2. **Install uv** (if not already installed):
 
-2. **Install PyTorch** (platform-specific):
-
-   **For Linux with NVIDIA GPUs (CUDA 11.8)**:
+   uv is a fast Python package installer and environment manager that handles Python version management automatically.
 
    ```bash
-   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+   # macOS/Linux
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+
+   # Windows (PowerShell)
+   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```
 
-   **For Linux with NVIDIA GPUs (CUDA 12.1)**:
+   After installation, restart your terminal or source your shell profile.
+
+3. **Create virtual environment**:
+
+   uv will automatically download and install Python 3.11 if not already available:
 
    ```bash
+   # uv downloads Python 3.11 automatically - no system Python required
+   uv venv .venv --python 3.11
+
+   # Activate the environment
+   source .venv/bin/activate  # macOS/Linux
+   # or
+   .venv\Scripts\activate  # Windows
+   ```
+
+   > **Note**: uv manages Python versions independently. You don't need Python 3.11 installed on your system.
+
+4. **Install PyTorch** (REQUIRED - platform-specific):
+
+   **IMPORTANT**: PyTorch must be installed first with the correct hardware support.
+
+   **For Linux/Windows with NVIDIA GPUs**:
+
+   First check your CUDA version:
+   ```bash
+   nvidia-smi  # Look for "CUDA Version: X.X"
+   ```
+
+   Then install PyTorch with matching CUDA support:
+   ```bash
+   # CUDA 11.8
+   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+   # CUDA 12.1 or higher
    uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
    ```
 
-   **For macOS with Apple Silicon (M1/M2/M3) - MPS acceleration**:
+   **For macOS with Apple Silicon (M1/M2/M3/M4)**:
 
    ```bash
    uv pip install torch torchvision
    ```
+
+   MPS (Metal Performance Shaders) acceleration is included automatically.
 
    **For macOS Intel or CPU-only systems**:
 
@@ -114,26 +151,17 @@ This project implements an end-to-end machine learning pipeline for developmenta
    uv pip install torch torchvision
    ```
 
-   > **Note**:
-   > - Check your CUDA version with `nvidia-smi` on Linux
-   > - MPS (Metal Performance Shaders) provides GPU acceleration on Apple Silicon Macs
-   > - Visit [pytorch.org](https://pytorch.org/get-started/locally/) for the latest installation commands
+   > **Note**: Visit [pytorch.org](https://pytorch.org/get-started/locally/) for the latest installation commands for your platform.
 
-3. **Install remaining dependencies**:
-
-   Using `uv`:
+5. **Install remaining dependencies**:
 
    ```bash
    uv pip install -e .
    ```
 
-   Or using standard pip:
+   This installs all remaining dependencies (OpenCV, NumPy, SciPy, scikit-image, Matplotlib, pandas, PyYAML, TensorBoard, tqdm, kornia).
 
-   ```bash
-   pip install -e .
-   ```
-
-4. **Verify installation**:
+6. **Verify installation**:
 
    Run the verification script to check all dependencies and GPU acceleration:
 
@@ -141,11 +169,17 @@ This project implements an end-to-end machine learning pipeline for developmenta
    python verify_installation.py
    ```
 
-   This will verify:
-   - Python version
-   - PyTorch installation and version
-   - GPU acceleration (CUDA/MPS/CPU)
-   - All required dependencies
+   This automated verification script will check:
+   - Python version (requires ≥ 3.11)
+   - PyTorch installation and version (≥ 2.0.0)
+   - GPU acceleration availability:
+     - CUDA for NVIDIA GPUs
+     - MPS for Apple Silicon (M1/M2/M3/M4)
+     - Falls back to CPU if neither available
+   - All required dependencies (opencv-python, numpy, scipy, scikit-image, matplotlib, pandas, pyyaml, tensorboard, tqdm, kornia)
+   - Display device information and recommendations
+
+   The script will provide clear feedback on any missing dependencies or configuration issues.
 
    You can also verify manually:
 
@@ -169,14 +203,17 @@ This project implements an end-to-end machine learning pipeline for developmenta
 
 ### Dependencies
 
-The project requires the following main packages (automatically installed):
+The project requires the following main packages:
 
-- **Deep Learning**: PyTorch ≥2.0.0, torchvision ≥0.15.0
-- **Computer Vision**: OpenCV ≥4.8.0, scikit-image ≥0.21.0
-- **Scientific Computing**: NumPy ≥1.24.0, SciPy ≥1.11.0
-- **Visualization**: Matplotlib ≥3.7.0, TensorBoard ≥2.20.0
-- **Data Processing**: Pandas ≥2.0.0, PyYAML ≥6.0.0
-- **Utilities**: tqdm ≥4.67.1
+- **Deep Learning** (install separately first): PyTorch ≥2.0.0, torchvision ≥0.15.0
+- **Computer Vision** (auto-installed): OpenCV ≥4.8.0, scikit-image ≥0.21.0
+- **Scientific Computing** (auto-installed): NumPy ≥1.24.0, SciPy ≥1.11.0
+- **Visualization** (auto-installed): Matplotlib ≥3.7.0, TensorBoard ≥2.20.0
+- **Data Processing** (auto-installed): Pandas ≥2.0.0, PyYAML ≥6.0.0
+- **Utilities** (auto-installed): tqdm ≥4.65.0, kornia ≥0.7.0
+
+**Why separate PyTorch installation?**
+PyTorch must be installed from platform-specific indexes to get proper CUDA/MPS support. Installing via pyproject.toml would only give CPU-only builds.
 
 ---
 
@@ -329,7 +366,7 @@ python main.py --mode test \
 
 Testing generates:
 
-1. **Console metrics**: MSE, MAE, RMSE, R² score
+1. **Console metrics**: MSE, MAE, R² score
 2. **Scatter plots**: Predicted vs. actual staging values
 3. **Saved plots**: In the same directory as the checkpoint
 
@@ -351,7 +388,7 @@ Access at: `http://localhost:6006`
 
 #### TensorBoard Features
 
-- **Scalars**: Training/validation loss, MAE, RMSE, R², learning rate
+- **Scalars**: Training/validation loss, MAE, R², learning rate
 - **Images**: Sample predictions with predicted vs. actual values
 - **Graphs**: Model architecture visualization
 - **Histograms**: Weight and gradient distributions (if enabled)
@@ -408,7 +445,11 @@ data:
   
   # Which image type to use for training
   image_type: "unrolled"  # Options: original, segmented, nuclear_layer, unrolled
-  
+
+  # Enable data augmentation (random interpolation between adjacent images)
+  data_augment: true  # true = training uses Beta(0.5, 0.5) interpolation
+                      # false = training uses original images only
+
   # Number of workers for data loading (0 = main thread)
   num_workers: 0
 ```
@@ -637,11 +678,11 @@ Input x
 
 | Model  | Base Channels | Blocks     | Parameters | Use Case                    |
 |--------|---------------|------------|------------|-----------------------------|
-| Nano   | 16            | (1,1,1,1)  | ~50K       | Rapid prototyping           |
-| Tiny   | 32            | (1,1,1,1)  | ~200K      | Limited compute             |
+| Nano   | 8             | (1,1,1,1)  | ~150K      | Rapid prototyping           |
+| Tiny   | 32            | (1,1,1,1)  | ~700K      | Limited compute             |
 | Small  | 64            | (2,2,2,2)  | ~11M       | **Default**, good balance   |
-| Medium | 96            | (2,2,2,2)  | ~25M       | More capacity               |
-| Large  | 128           | (3,4,6,3)  | ~80M       | Maximum accuracy            |
+| Medium | 64            | (3,4,6,3)  | ~25M       | ResNet34-like architecture  |
+| Large  | 64            | (3,4,23,3) | ~45M       | ResNet50-like, max accuracy |
 
 ---
 
@@ -653,22 +694,25 @@ Staging_Model/
 ├── config.yml             # Configuration file
 ├── metadata.csv           # Bit depth and PPM metadata
 ├── pyproject.toml         # Package dependencies
+├── verify_installation.py # Installation verification script
 │
 ├── src/                   # Source code
 │   ├── __init__.py
 │   ├── config.py          # Configuration dataclasses
 │   ├── cvimage.py         # Image processing pipeline (CVImage class)
-│   ├── data.py            # Data loading and dataset classes
+│   ├── data.py            # Data loading and metadata management
+│   ├── torchdataset.py    # PyTorch Dataset wrapper with augmentation
+│   ├── torchimage.py      # PyTorch tensor conversion and transforms
 │   ├── functions.py       # Utility functions (border smoothing, normals)
 │   ├── model.py           # ResNet model architecture
 │   ├── run_manager.py     # Experiment tracking and run management
 │   ├── tensorboard.py     # TensorBoard logging utilities
 │   ├── test.py            # Testing and evaluation
-│   ├── torchimage.py      # PyTorch image wrapper
 │   └── train.py           # Training pipeline and trainer class
 │
-├── scripts/               # Utility scripts
-│   └── process_images.py  # Batch image processing
+├── scripts/                    # Utility scripts
+│   ├── process_images.py       # Batch image processing
+│   └── prepare_training_data.py # Generate synthetic training images via interpolation
 │
 ├── tests/                 # Test scripts
 │   ├── test_torch.py
@@ -706,9 +750,17 @@ Staging_Model/
 
 #### `src/data.py`
 
-- `Data`: Handles data loading from disk
-- `TorchDataset`: PyTorch dataset with random interpolation augmentation
-- Automatic train/val/test splitting
+- `Data`: Handles data loading from disk and metadata management
+- Loads images, staging values, and metadata (PPM, bit depth)
+- Implements random interpolation augmentation using Beta(0.5, 0.5) distribution
+- Automatic train/val/test splitting by folder ID
+
+#### `src/torchdataset.py`
+
+- `TorchDataset`: PyTorch Dataset wrapper combining Data class with CVImage processing
+- Integrates complete image preprocessing pipeline for training
+- Supports multiple image types (original, segmented, nuclear_layer, unrolled)
+- Configurable boundary extensions per folder (sagittal vs cross-section)
 
 #### `src/model.py`
 
@@ -718,7 +770,7 @@ Staging_Model/
 
 #### `src/train.py`
 
-- `MetricsTracker`: Tracks MSE, MAE, RMSE, R² during training
+- `MetricsTracker`: Tracks MSE, MAE, R² during training
 - `Trainer`: Complete training loop with validation, checkpointing, and logging
 - `train_model()`: High-level training function
 
@@ -817,24 +869,31 @@ best_loss = checkpoint['best_val_loss']
 The pipeline uses **random interpolation** for data augmentation:
 
 ```python
-# In TorchDataset
-def __getitem__(self, idx):
-    folder = random.choice(self.folders)
+# In Data class (data.py)
+def get_random_image_from_folder_idx(self, folder_idx):
+    folder = self.folders[folder_idx]
     image_idx = random.randint(0, len(folder_data) - 2)
-    
-    # Load two adjacent images
+
+    # Load two adjacent images (sorted by staging value)
     I1, id1 = load_image(image_idx)
     I2, id2 = load_image(image_idx + 1)
-    
-    # Random interpolation weight
-    alpha = random.random()
-    
+
+    # Random interpolation weight using Beta(0.5, 0.5) distribution
+    # This favors endpoints (original images) while allowing smooth transitions
+    alpha = np.random.beta(0.5, 0.5)
+
     # Interpolate image and label
     I = (1 - alpha) * I1 + alpha * I2
     id_interp = (1 - alpha) * id1 + alpha * id2
-    
-    return I, id_interp
+
+    return I, id_interp, folder_idx, image_idx
 ```
+
+**Why Beta(0.5, 0.5)?**
+- Creates a U-shaped distribution that favors endpoint values (0 and 1)
+- Preserves more original images while still generating intermediate samples
+- Provides smooth interpolation between developmental stages
+- Can be controlled via `data_augment: true/false` in config.yml
 
 This creates effectively infinite training samples from discrete images.
 
@@ -906,17 +965,40 @@ data:
 
 **Solutions**:
 
-For NVIDIA GPUs:
+**Check installation order first**: If you installed dependencies with `pip install -e .` BEFORE installing PyTorch, you have CPU-only PyTorch.
 
-- Verify CUDA installation: `python -c "import torch; print(torch.cuda.is_available())"`
-- Update GPU drivers
-- Reinstall PyTorch with CUDA: `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118`
+**For NVIDIA GPUs**:
 
-For Apple Silicon:
+1. Verify CUDA is available:
 
-- Verify MPS availability: `python -c "import torch; print(torch.backends.mps.is_available())"`
-- Ensure you're running on macOS 12.3+ with Apple Silicon (M1/M2/M3)
-- If MPS is not available, the code will automatically fall back to CPU
+   ```bash
+   python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
+   ```
+
+2. If False, reinstall PyTorch with CUDA support:
+
+   ```bash
+   # Check CUDA version first
+   nvidia-smi
+
+   # Then reinstall (example for CUDA 12.1)
+   uv pip uninstall torch torchvision
+   uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+   ```
+
+3. Update GPU drivers if CUDA still not detected
+
+**For Apple Silicon**:
+
+1. Verify MPS availability:
+
+   ```bash
+   python -c "import torch; print(f'MPS: {torch.backends.mps.is_available()}')"
+   ```
+
+2. Ensure you're running macOS 12.3+ with Apple Silicon (M1/M2/M3/M4)
+
+3. If MPS is not available, the code will automatically fall back to CPU
 
 #### 4. Poor Training Performance
 

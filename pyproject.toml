@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Staging Model for embryo image processing"
 requires-python = ">=3.11"
 dependencies = [
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
+    # NOTE: PyTorch must be installed separately BEFORE this package
+    # See installation instructions below for platform-specific PyTorch installation
     "opencv-python>=4.8.0",
     "numpy>=1.24.0",
     "scipy>=1.11.0",
@@ -25,25 +25,49 @@ dependencies = [
 # Installation instructions:
 # =======================
 #
-# For CUDA support (Linux with NVIDIA GPUs):
-#   CUDA 11.8: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-#   CUDA 12.1: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-#   Then: uv pip install -e .
+# IMPORTANT: This package uses uv for Python version management.
+# uv will automatically download and manage Python 3.11+ without requiring system Python.
 #
-# For MPS support (macOS with Apple Silicon M1/M2/M3):
-#   uv pip install torch torchvision
-#   Then: uv pip install -e .
+# Step 1: Install uv (if not already installed):
+#   curl -LsSf https://astral.sh/uv/install.sh | sh  # macOS/Linux
+#   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
 #
-# For CPU-only (macOS Intel or systems without GPU):
-#   uv pip install torch torchvision
-#   Then: uv pip install -e .
+# Step 2: Create virtual environment with Python 3.11 (uv downloads Python automatically):
+#   uv venv .venv --python 3.11
+#   source .venv/bin/activate  # macOS/Linux
+#   .venv\Scripts\activate     # Windows
 #
-# The code automatically detects and uses available hardware acceleration:
-#   Priority: CUDA > MPS > CPU
+# Step 3: Install PyTorch (REQUIRED - platform-specific):
+#
+#   For CUDA support (Linux/Windows with NVIDIA GPUs):
+#     Check CUDA version: nvidia-smi
+#     CUDA 11.8: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#     CUDA 12.1: uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+#   For MPS support (macOS with Apple Silicon M1/M2/M3):
+#     uv pip install torch torchvision
+#
+#   For CPU-only (macOS Intel or systems without GPU):
+#     uv pip install torch torchvision
+#
+# Step 4: Install this package and remaining dependencies:
+#   uv pip install -e .
+#
+# Step 5: Verify installation:
+#   python verify_installation.py
+#
+# Notes:
+#   - uv manages Python versions independently - no system Python required
+#   - PyTorch MUST be installed before this package (separate index-url for CUDA)
+#   - The code automatically detects and uses available hardware (CUDA > MPS > CPU)
 
 [project.optional-dependencies]
-cuda118 = []  # Empty, but triggers the index-url for torch/torchvision
-cuda121 = []  # Empty, but triggers the index-url for torch/torchvision
+# Optional dependencies for development
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
