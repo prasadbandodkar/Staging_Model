@@ -1075,34 +1075,6 @@ watch -n 1 nvidia-smi
 
 ---
 
-## Citation
 
-If you use this code in your research, please cite:
-
-```bibtex
-@software{staging_model_2026,
-  author = {Your Name},
-  title = {Staging Model for Embryo Nuclear Layer Analysis},
-  year = {2026},
-  url = {https://github.com/yourusername/staging-model}
-}
-```
-
----
-
-## License
-
-[Specify your license here]
-
----
-
-## Contact
-
-For questions, issues, or contributions:
-
-- Email: <your.email@institution.edu>
-- GitHub Issues: [https://github.com/yourusername/staging-model/issues](https://github.com/yourusername/staging-model/issues)
-
----
 
 **Last Updated**: January 2026
