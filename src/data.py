@@ -29,37 +29,48 @@ class Data:
     between adjacent imag∏es to generate synthetic training data.
     """
     
-    def __init__(self, 
-                 path: str, 
-                 test: List[int] = [], 
-                 val: List[int] = [], 
+    def __init__(self,
+                 path: str,
+                 test: List[int] = [],
+                 val: List[int] = [],
                  ignore: List[int] = [],
-                 metadata_path: Optional[str] = None) -> None:
+                 metadata_path: Optional[str] = None,
+                 augment_distribution: str = 'uniform',
+                 augment_beta_alpha: float = 0.5,
+                 augment_beta_beta: float = 0.5) -> None:
         """
         Initialize the Data handler.
-        
+
         Args:
             path: Root path to the data directory
             test: List of folder IDs to use for testing
             val: List of folder IDs to use for validation
             ignore: List of folder IDs to ignore
             metadata_path: Optional path to metadata CSV file
+            augment_distribution: Distribution for interpolation sampling ('uniform' or 'beta')
+            augment_beta_alpha: Alpha parameter for Beta distribution (only used if augment_distribution='beta')
+            augment_beta_beta: Beta parameter for Beta distribution (only used if augment_distribution='beta')
         """
         self.data_path  : str       = path
         self.train_list : List[str] = []
         self.val_list   : List[str] = []
         self.test_list  : List[str] = []
         self.ignore_list: List[str] = []
-        
+
         self.train_data: Dict[str, pd.DataFrame] = {}
         self.val_data  : Dict[str, pd.DataFrame] = {}
         self.test_data : Dict[str, pd.DataFrame] = {}
-        
+
+        # Augmentation configuration
+        self.augment_distribution = augment_distribution
+        self.augment_beta_alpha = augment_beta_alpha
+        self.augment_beta_beta = augment_beta_beta
+
         # Load metadata if provided
         self.metadata: Dict[int, Dict[str, any]] = {}
         if metadata_path:
             self._load_metadata(metadata_path)
-        
+
         self.train_test_val_data(test, val, ignore)
 
 
@@ -345,7 +356,7 @@ class Data:
     def get_random_image_from_folder_idx(self, folder: str, idx: int, list_type: ListType) -> Tuple[npt.NDArray[np.uint8], float]:
         """
         Get an image from a specific folder and index.
-        
+
         For training: Creates a synthetic image by randomly interpolating between two adjacent images.
         For test/val: Returns the actual raw image without interpolation for consistent evaluation.
 
@@ -358,21 +369,29 @@ class Data:
             Tuple of (image array, id)
         """
         I1, id1 = self.get_raw_image(folder, idx, list_type)
-        
+
         # Only interpolate for training data
         if list_type == 'train':
             I2, id2 = self.get_raw_image(folder, idx+1, list_type)
-            
-            # Use U-shaped Beta distribution: Beta(0.5, 0.5)
-            # This favors alpha near 0 and 1 (original images) while still allowing interpolation
-            # More original images in training while keeping smooth transitions
-            alpha: float = torch.distributions.Beta(0.5, 0.5).sample().item()
+
+            # Sample alpha based on configured distribution
+            if self.augment_distribution == 'beta':
+                # Beta distribution: Beta(alpha, beta)
+                # Beta(0.5, 0.5) creates U-shape favoring endpoints (original images)
+                # Beta(1, 1) is uniform distribution
+                # Beta(2, 2) favors center (more interpolation)
+                alpha: float = torch.distributions.Beta(self.augment_beta_alpha, self.augment_beta_beta).sample().item()
+            else:
+                # Uniform distribution [0, 1] - default
+                # Equal probability for all interpolation values
+                alpha: float = torch.rand(1).item()
+
             I = cv.addWeighted(I1, alpha, I2, 1-alpha, 0)
             id: float = alpha*id1 + (1-alpha)*id2
         else:
             # Test/val: use actual raw images (no interpolation)
             I, id = I1, id1
-        
+
         return I, id
 
 

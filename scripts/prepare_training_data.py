@@ -9,6 +9,7 @@ Test and validation images are copied as-is without augmentation.
 Usage:
     # Using config file (default: scripts/training_data.yml)
     python scripts/prepare_training_data.py
+    python scripts/prepare_training_data.py --unroll
 
     # Using custom config file
     python scripts/prepare_training_data.py --config /path/to/config.yml
@@ -19,11 +20,13 @@ Usage:
         --output_path /path/to/output/data \
         --num_augmentations 10 \
         --test_ids 21 22 \
-        --val_ids 6 34
+        --val_ids 6 34 \
+        --unroll
 """
 
 import argparse
 import os
+import sys
 import shutil
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
@@ -33,6 +36,11 @@ import cv2 as cv
 import torch
 from tqdm import tqdm
 import yaml
+
+# Add parent directory to path to import src modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.cvimage import CVImage
+from src.data import Data
 
 
 def load_config(config_path: Path) -> Dict[str, Any]:
@@ -100,6 +108,36 @@ def parse_args():
         default=None,
         help="Random seed for reproducibility (overrides config)"
     )
+    parser.add_argument(
+        "--unroll",
+        action='store_true',
+        help="Unroll images using CVImage before saving (requires config with unroll parameters)"
+    )
+    parser.add_argument(
+        "--metadata_path",
+        type=str,
+        default=None,
+        help="Path to metadata CSV file (overrides config)"
+    )
+    parser.add_argument(
+        "--augment_distribution",
+        type=str,
+        default=None,
+        choices=['uniform', 'beta'],
+        help="Distribution for augmentation sampling (overrides config, default: uniform)"
+    )
+    parser.add_argument(
+        "--augment_beta_alpha",
+        type=float,
+        default=None,
+        help="Alpha parameter for Beta distribution (overrides config)"
+    )
+    parser.add_argument(
+        "--augment_beta_beta",
+        type=float,
+        default=None,
+        help="Beta parameter for Beta distribution (overrides config)"
+    )
     return parser.parse_args()
 
 
@@ -134,42 +172,161 @@ def load_id_csv(folder_path: Path) -> pd.DataFrame:
     return df
 
 
-def copy_folder(src_folder: Path, dst_folder: Path):
+def unroll_image(
+    image: np.ndarray,
+    image_id: float,
+    folder_name: str,
+    unroll_config: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]] = None
+) -> np.ndarray:
+    """
+    Unroll an image using CVImage.
+
+    Args:
+        image: Input grayscale image
+        image_id: Image identifier/stage value
+        folder_name: Name of the folder (for determining sagittal vs cross-section)
+        unroll_config: Configuration dictionary with CVImage parameters
+        metadata: Optional metadata dictionary with PPM info
+
+    Returns:
+        Unrolled image as numpy array
+    """
+    folder_id = get_folder_id(folder_name)
+
+    # Get boundary parameters based on folder type
+    sagittal_prefixes = unroll_config.get('sagittal_folder_prefixes', [6, 7])
+    if folder_id in sagittal_prefixes:
+        boundary = unroll_config['boundary_extension']['sagittal']
+    else:
+        boundary = unroll_config['boundary_extension']['cross_section']
+
+    # Get PPM from metadata if available
+    source_ppm = metadata.get('ppm', None) if metadata else None
+
+    # Get target_ppm from config (None disables PPM scaling)
+    target_ppm = unroll_config.get('target_ppm', None)
+
+    # Create CVImage instance
+    cv_image = CVImage(
+        I=image,
+        id=image_id,
+        size=unroll_config['size'],
+        padding=unroll_config['padding'],
+        plot_images=False,
+        npoints=unroll_config['npoints'],
+        inward=boundary['inward'],
+        outward=boundary['outward'],
+        trunc_width=None,  # Don't truncate when saving to disk
+        source_ppm=source_ppm,
+        target_ppm=target_ppm
+    )
+
+    # Get unrolled image
+    unrolled = cv_image.get_unrolled_image(trunc_width=None)
+
+    # Squeeze to remove channel dimension if present
+    if unrolled.ndim == 3 and unrolled.shape[2] == 1:
+        unrolled = unrolled.squeeze(axis=2)
+
+    return unrolled
+
+
+def copy_folder(
+    data: Data,
+    folder: str,
+    dst_folder: Path,
+    list_type: str,
+    unroll: bool = False,
+    unroll_config: Optional[Dict[str, Any]] = None,
+    folder_metadata: Optional[Dict[str, Any]] = None
+):
     """
     Copy a folder and all its contents, including id.csv.
 
     Args:
-        src_folder: Source folder path
+        data: Data instance for loading images
+        folder: Folder name (e.g., "6_name")
         dst_folder: Destination folder path
+        list_type: Dataset type ('train', 'test', or 'val')
+        unroll: Whether to unroll images before saving
+        unroll_config: Configuration for unrolling (required if unroll=True)
+        folder_metadata: Metadata for the folder (for PPM scaling)
     """
-    print(f"  Copying {src_folder.name}...")
+    print(f"  Copying {folder}...")
 
     # Create destination folder
     dst_folder.mkdir(parents=True, exist_ok=True)
 
-    # Copy all files
-    for file in src_folder.iterdir():
-        if file.is_file():
-            shutil.copy2(file, dst_folder / file.name)
+    # Get the data dictionary for this list type
+    list_dict = {'train': data.train_data, 'test': data.test_data, 'val': data.val_data}
+    df = list_dict[list_type][folder]
+
+    # Get source folder path
+    src_folder = Path(data.data_path) / folder
+
+    if not unroll:
+        # Simple copy without unrolling
+        for file in src_folder.iterdir():
+            if file.is_file():
+                shutil.copy2(file, dst_folder / file.name)
+    else:
+        # Copy and unroll images using Data class
+        if unroll_config is None:
+            raise ValueError("unroll_config required when unroll=True")
+
+        # Process each image using Data class
+        for idx in tqdm(range(len(df)), desc=f"    Unrolling {folder}"):
+            # Load image using Data class
+            I, img_id = data.get_raw_image(folder, idx, list_type)
+
+            # Unroll image
+            I_unrolled = unroll_image(I, img_id, folder, unroll_config, folder_metadata)
+
+            # Get original filename to save with same name
+            img_path = df.iloc[idx, 0]  # Full path from id.csv
+            img_filename = Path(img_path).name
+
+            # Save unrolled image
+            dst_img_path = dst_folder / img_filename
+            cv.imwrite(str(dst_img_path), I_unrolled)
+
+        # Copy id.csv
+        shutil.copy2(src_folder / 'id.csv', dst_folder / 'id.csv')
 
 
 def generate_augmented_images(
-    src_folder: Path,
+    data: Data,
+    folder: str,
     dst_folder: Path,
-    num_augmentations: int
+    num_augmentations: int,
+    unroll: bool = False,
+    unroll_config: Optional[Dict[str, Any]] = None,
+    folder_metadata: Optional[Dict[str, Any]] = None
 ) -> None:
     """
-    Generate augmented images for a training folder.
+    Generate augmented images for a training folder using Data class pipeline.
 
     For each adjacent pair of images (i, i+1), generates num_augmentations
-    synthetic images using random interpolation with Beta(0.5, 0.5) distribution.
+    synthetic images using Data.get_random_image_from_folder_idx which uses
+    Beta(0.5, 0.5) distribution for interpolation.
 
     Args:
-        src_folder: Source folder path
+        data: Data instance for loading and augmenting images
+        folder: Folder name (e.g., "1_name")
         dst_folder: Destination folder path
         num_augmentations: Number of synthetic images per image pair
+        unroll: Whether to unroll images before saving
+        unroll_config: Configuration for unrolling (required if unroll=True)
+        folder_metadata: Metadata for the folder (for PPM scaling)
     """
-    print(f"  Augmenting {src_folder.name}...")
+    if unroll:
+        print(f"  Augmenting and unrolling {folder}...")
+    else:
+        print(f"  Augmenting {folder}...")
+
+    if unroll and unroll_config is None:
+        raise ValueError("unroll_config required when unroll=True")
 
     # Create destination folder
     dst_folder.mkdir(parents=True, exist_ok=True)
@@ -177,88 +334,106 @@ def generate_augmented_images(
     # Get folder name for path prefixes
     folder_name = dst_folder.name
 
-    # Load id.csv
-    df = load_id_csv(src_folder)
+    # Get dataframe for this folder
+    df = data.train_data[folder]
 
     # Prepare new DataFrame for augmented data
     new_rows = []
 
     # Process each adjacent pair of images
-    for idx in tqdm(range(len(df) - 1), desc=f"    Processing {src_folder.name}"):
-        # Get image pair info
-        img1_rel_path = df.iloc[idx]['path']
-        img2_rel_path = df.iloc[idx + 1]['path']
-        id1 = df.iloc[idx]['id']
-        id2 = df.iloc[idx + 1]['id']
+    for idx in tqdm(range(len(df) - 1), desc=f"    Processing {folder}"):
+        # Load first original image using Data class
+        I1, id1 = data.get_raw_image(folder, idx, 'train')
 
-        # Load images (extract just the filename from the relative path)
-        img1_path = src_folder / Path(img1_rel_path).name
-        img2_path = src_folder / Path(img2_rel_path).name
+        # Get original filename for naming
+        img1_path = df.iloc[idx, 0]  # Full path from id.csv
+        base_name1 = Path(img1_path).stem
+        ext1 = Path(img1_path).suffix
 
-        if not img1_path.exists():
-            print(f"    Warning: {img1_path} not found, skipping...")
-            continue
-        if not img2_path.exists():
-            print(f"    Warning: {img2_path} not found, skipping...")
-            continue
-
-        I1 = cv.imread(str(img1_path), cv.IMREAD_GRAYSCALE)
-        I2 = cv.imread(str(img2_path), cv.IMREAD_GRAYSCALE)
-
-        if I1 is None or I2 is None:
-            print(f"    Warning: Could not load images for pair {idx}, skipping...")
-            continue
-
-        # Copy original images first
-        base_name1 = Path(img1_rel_path).stem
-        ext1 = Path(img1_rel_path).suffix
+        # Process and save first original image
         dst_img1_name = f"{base_name1}_orig{ext1}"
         dst_img1_path = dst_folder / dst_img1_name
-        cv.imwrite(str(dst_img1_path), I1)
-        # Include folder name in path to match original format
+
+        if unroll:
+            I1_processed = unroll_image(I1, id1, folder, unroll_config, folder_metadata)
+        else:
+            I1_processed = I1
+
+        cv.imwrite(str(dst_img1_path), I1_processed)
         new_rows.append({'path': f"{folder_name}/{dst_img1_name}", 'id': id1})
 
-        # Generate augmented images
+        # Generate augmented images using Data class pipeline
         for aug_idx in range(num_augmentations):
-            # Sample alpha from Beta(0.5, 0.5) - same as in get_random_image_from_folder_idx
-            alpha = torch.distributions.Beta(0.5, 0.5).sample().item()
+            # Use Data class method for augmentation (includes Beta sampling and interpolation)
+            I_aug, id_aug = data.get_random_image_from_folder_idx(folder, idx, 'train')
 
-            # Interpolate images
-            I_aug = cv.addWeighted(I1, alpha, I2, 1 - alpha, 0)
-
-            # Calculate interpolated ID
-            id_aug = alpha * id1 + (1 - alpha) * id2
+            # Unroll if requested
+            if unroll:
+                I_aug_processed = unroll_image(I_aug, id_aug, folder, unroll_config, folder_metadata)
+            else:
+                I_aug_processed = I_aug
 
             # Save augmented image
             aug_name = f"{base_name1}_aug_{aug_idx}.png"
             aug_path = dst_folder / aug_name
-            cv.imwrite(str(aug_path), I_aug)
+            cv.imwrite(str(aug_path), I_aug_processed)
 
             # Add to new rows (include folder name in path to match original format)
             new_rows.append({'path': f"{folder_name}/{aug_name}", 'id': id_aug})
 
     # Add the last original image
     if len(df) > 0:
-        last_img_rel_path = df.iloc[-1]['path']
-        last_id = df.iloc[-1]['id']
-        last_img_path = src_folder / Path(last_img_rel_path).name
+        # Load last image using Data class
+        I_last, last_id = data.get_raw_image(folder, len(df) - 1, 'train')
 
-        if last_img_path.exists():
-            I_last = cv.imread(str(last_img_path), cv.IMREAD_GRAYSCALE)
-            if I_last is not None:
-                base_name_last = Path(last_img_rel_path).stem
-                ext_last = Path(last_img_rel_path).suffix
-                dst_img_last_name = f"{base_name_last}_orig{ext_last}"
-                dst_img_last_path = dst_folder / dst_img_last_name
-                cv.imwrite(str(dst_img_last_path), I_last)
-                # Include folder name in path to match original format
-                new_rows.append({'path': f"{folder_name}/{dst_img_last_name}", 'id': last_id})
+        # Get original filename
+        last_img_path = df.iloc[-1, 0]
+        base_name_last = Path(last_img_path).stem
+        ext_last = Path(last_img_path).suffix
+        dst_img_last_name = f"{base_name_last}_orig{ext_last}"
+        dst_img_last_path = dst_folder / dst_img_last_name
+
+        if unroll:
+            I_last_processed = unroll_image(I_last, last_id, folder, unroll_config, folder_metadata)
+        else:
+            I_last_processed = I_last
+
+        cv.imwrite(str(dst_img_last_path), I_last_processed)
+        new_rows.append({'path': f"{folder_name}/{dst_img_last_name}", 'id': last_id})
 
     # Save new id.csv
     new_df = pd.DataFrame(new_rows)
     new_df.to_csv(dst_folder / 'id.csv', index=False, header=False)
 
     print(f"    Generated {len(new_rows)} total images ({len(df)} original + {len(new_rows) - len(df)} augmented)")
+
+
+def load_metadata(metadata_path: Optional[Path]) -> Dict[int, Dict[str, Any]]:
+    """
+    Load metadata from CSV file.
+
+    Args:
+        metadata_path: Path to metadata CSV file
+
+    Returns:
+        Dictionary mapping folder IDs to metadata dictionaries
+    """
+    if metadata_path is None or not metadata_path.exists():
+        return {}
+
+    df = pd.read_csv(metadata_path)
+    metadata = {}
+
+    for _, row in df.iterrows():
+        # Extract folder_id from Filename column (e.g., "1_..." -> 1)
+        filename = row['Filename']
+        folder_id = int(filename.split('_')[0])
+
+        metadata[folder_id] = {
+            'ppm': row.get('ppm', None)
+        }
+
+    return metadata
 
 
 def main():
@@ -289,6 +464,11 @@ def main():
     test_ids = args.test_ids if args.test_ids is not None else config.get('test_ids')
     val_ids = args.val_ids if args.val_ids is not None else config.get('val_ids')
     seed = args.seed if args.seed is not None else config.get('seed', 42)
+    unroll = args.unroll
+    metadata_path = args.metadata_path if args.metadata_path is not None else config.get('metadata_path')
+    augment_distribution = args.augment_distribution if args.augment_distribution is not None else config.get('augment_distribution', 'uniform')
+    augment_beta_alpha = args.augment_beta_alpha if args.augment_beta_alpha is not None else config.get('augment_beta_alpha', 0.5)
+    augment_beta_beta = args.augment_beta_beta if args.augment_beta_beta is not None else config.get('augment_beta_beta', 0.5)
 
     # Validate required parameters
     if data_path is None:
@@ -313,6 +493,43 @@ def main():
     # Create output directory
     output_path.mkdir(parents=True, exist_ok=True)
 
+    # Build unroll config if unrolling is enabled
+    unroll_config = None
+    metadata_dict = {}
+    if unroll:
+        # Try to load unroll parameters from config
+        unroll_params = config.get('unroll_params', {})
+
+        # Required parameters with defaults
+        unroll_config = {
+            'size': tuple(unroll_params.get('size', [512, 512])),
+            'padding': unroll_params.get('padding', 44),
+            'npoints': unroll_params.get('npoints', 100),
+            'boundary_extension': unroll_params.get('boundary_extension', {
+                'cross_section': {'inward': 34, 'outward': -30},
+                'sagittal': {'inward': 34, 'outward': -30}
+            }),
+            'sagittal_folder_prefixes': unroll_params.get('sagittal_folder_prefixes', [6, 7]),
+            'target_ppm': unroll_params.get('target_ppm', None)  # None disables PPM scaling
+        }
+
+        # Load metadata if available
+        if metadata_path is not None:
+            metadata_dict = load_metadata(Path(metadata_path))
+            print(f"Loaded metadata for {len(metadata_dict)} folders")
+
+    # Initialize Data class for loading images
+    print("\nInitializing Data loader...")
+    data_loader = Data(
+        path=str(data_path),
+        test=list(test_ids) if test_ids else [],
+        val=list(val_ids) if val_ids else [],
+        metadata_path=metadata_path,
+        augment_distribution=augment_distribution,
+        augment_beta_alpha=augment_beta_alpha,
+        augment_beta_beta=augment_beta_beta
+    )
+
     # Get test and val IDs
     test_ids_set = set(test_ids) if test_ids else set()
     val_ids_set = set(val_ids) if val_ids else set()
@@ -321,32 +538,46 @@ def main():
     print(f"Source: {data_path}")
     print(f"Output: {output_path}")
     print(f"Augmentations per pair: {num_augmentations}")
+    print(f"Augmentation distribution: {augment_distribution}")
+    if augment_distribution == 'beta':
+        print(f"Beta parameters: alpha={augment_beta_alpha}, beta={augment_beta_beta}")
     print(f"Test IDs: {sorted(test_ids_set) if test_ids_set else 'None'}")
     print(f"Val IDs: {sorted(val_ids_set) if val_ids_set else 'None'}")
     print(f"Seed: {seed}")
+    print(f"Unroll: {unroll}")
+    if unroll:
+        target_ppm = unroll_config.get('target_ppm', None)
+        if target_ppm is not None:
+            print(f"PPM scaling: Enabled (target_ppm={target_ppm})")
+        else:
+            print(f"PPM scaling: Disabled")
+        if metadata_path:
+            print(f"Metadata: {metadata_path}")
     print()
 
-    # Get all folders
-    folders = [f for f in data_path.iterdir() if f.is_dir()]
+    # Process each folder using Data class
+    all_folders = data_loader.train_list + data_loader.test_list + data_loader.val_list
 
-    if not folders:
-        raise ValueError(f"No folders found in {data_path}")
+    for folder in sorted(all_folders):
+        folder_id = get_folder_id(folder)
+        dst_folder = output_path / folder
 
-    # Process each folder
-    for folder in sorted(folders):
-        folder_id = get_folder_id(folder.name)
-        src_folder = folder
-        dst_folder = output_path / folder.name
+        # Get metadata for this folder
+        folder_metadata = metadata_dict.get(folder_id, {})
 
         if folder_id in test_ids_set:
-            print(f"Test folder: {folder.name}")
-            copy_folder(src_folder, dst_folder)
+            print(f"Test folder: {folder}")
+            copy_folder(data_loader, folder, dst_folder, 'test', unroll=unroll,
+                       unroll_config=unroll_config, folder_metadata=folder_metadata)
         elif folder_id in val_ids_set:
-            print(f"Validation folder: {folder.name}")
-            copy_folder(src_folder, dst_folder)
+            print(f"Validation folder: {folder}")
+            copy_folder(data_loader, folder, dst_folder, 'val', unroll=unroll,
+                       unroll_config=unroll_config, folder_metadata=folder_metadata)
         else:
-            print(f"Training folder: {folder.name}")
-            generate_augmented_images(src_folder, dst_folder, num_augmentations)
+            print(f"Training folder: {folder}")
+            generate_augmented_images(data_loader, folder, dst_folder, num_augmentations,
+                                     unroll=unroll, unroll_config=unroll_config,
+                                     folder_metadata=folder_metadata)
 
     print(f"\n✓ Data preparation complete!")
     print(f"Output saved to: {output_path}")

@@ -3,14 +3,14 @@
 # ==============================================================================
 
 # Source data directory
-data_path: "/Volumes/X2/Projects/phd/staging/data/live_data"
+data_path: "/Volumes/X2/Projects/phd/staging/data/live_data2"
 
 # Output directory for prepared data
 output_path: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented"
 
 # Number of synthetic images to generate per adjacent image pair
 # Higher values = more augmented data but longer processing time
-num_augmentations: 10
+num_augmentations: 1
 
 # Test folder IDs (these will be copied without augmentation)
 test_ids: [21, 22]
@@ -20,3 +20,48 @@ val_ids: [6, 34]
 
 # Random seed for reproducibility
 seed: 42
+
+# Metadata CSV file path (optional, for PPM scaling)
+metadata_path: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
+
+# ==============================================================================
+# Augmentation Configuration
+# ==============================================================================
+# Distribution for interpolation sampling
+augment_distribution: "uniform"  # Options: uniform, beta
+
+# Beta distribution parameters (only used if augment_distribution=beta)
+# Beta(0.5, 0.5): U-shaped, favors endpoints (more original images)
+# Beta(1.0, 1.0): Uniform distribution
+# Beta(2.0, 2.0): Bell-shaped, favors center (more interpolation)
+augment_beta_alpha: 0.5
+augment_beta_beta: 0.5
+
+# ==============================================================================
+# Unroll Parameters (used when --unroll flag is passed)
+# ==============================================================================
+unroll_params:
+  # Image dimensions (final size after preprocessing)
+  size: [1024, 1024]
+
+  # Preprocessing
+  padding: 44
+  npoints: 60
+
+  # Target pixels-per-micron for normalization
+  # Set to null to disable PPM scaling (recommended for consistent brightness)
+  # Set to a number (e.g., 1.0) to enable PPM normalization
+  target_ppm: null
+
+  # Nuclear layer boundary extension - Different for cross-section vs sagittal
+  # Folders 6_ and 7_ are sagittal images; all others are cross-section
+  boundary_extension:
+    cross_section:
+      outward: -20    # Negative → extends outward → outer edge
+      inward: 44      # Positive → extends inward → inner edge
+    sagittal:
+      outward: -30
+      inward: 34
+
+  # Define which folder prefixes are sagittal (all others are cross-section)
+  sagittal_folder_prefixes: [6, 7, 40, 41, 42, 43]
