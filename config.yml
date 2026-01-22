@@ -10,7 +10,7 @@
 # ==============================================================================
 # Defines the learning task: regression or classification
 task:
-  type: "classification"  # Options: regression, classification
+  type: "regression"  # Options: regression, classification
 
   # Classification settings (only used when type=classification)
   # Note: Regression IDs from id.csv are automatically binned into classes
@@ -117,7 +117,7 @@ training:
   loss:
     # Regression losses: mse, smooth_l1, huber
     # Classification losses: cross_entropy (auto-selected based on task.type)
-    type: "cross_entropy"
+    type: "mse"
 
     # Huber loss parameters (only used if type=huber)
     huber_delta: 1.0

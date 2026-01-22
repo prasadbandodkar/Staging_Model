@@ -6,11 +6,11 @@
 data_path: "/Volumes/X2/Projects/phd/staging/data/live_data2"
 
 # Output directory for prepared data
-output_path: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented"
+output_path: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented2"
 
 # Number of synthetic images to generate per adjacent image pair
 # Higher values = more augmented data but longer processing time
-num_augmentations: 1
+num_augmentations: 10
 
 # Test folder IDs (these will be copied without augmentation)
 test_ids: [21, 22]
