@@ -4,20 +4,24 @@ Image Processing Pipeline Script
 Comprehensive script for the image processing pipeline.
 Processes real embryo images from data folders with two modes:
 1. 'all': Process images and save all intermediate processing stages (debugging/validation)
-2. 'unroll': Process images and save only the final unrolled nuclear layer
+2. 'final': Process images and save only the final image specified in process_config.yml
+
+Configuration:
+    Uses process_config.yml to specify:
+    - Data paths (root directory, metadata file)
+    - Image type to save (original, segmented, nuclear_layer, or unrolled)
+    - Preprocessing parameters (dimensions, padding, boundary extension)
 
 Usage:
-    # Process a single folder (save all intermediates)
-    python scripts/process_images.py --folder "6_2021_04_06_lif" --output-dir ./output/full --mode all
+    # Run with default config settings
+    python scripts/process_images.py
     
-    # Process a folder using partial name match (save only unrolled)
-    python scripts/process_images.py --folder "6_" --output-dir ./output/unrolled --mode unroll
+    # Run with custom config file
+    python scripts/process_images.py --config my_config.yml
     
-    # Process all folders (limit 3 images per folder, parallel processing)
-    python scripts/process_images.py --all --output-dir ./output/sample --limit 3 --mode unroll
-    
-    # Process all images from all folders
-    python scripts/process_images.py --all --output-dir ./output/complete --mode all
+    # Override specific config settings via command line
+    python scripts/process_images.py --folder "34_" --mode all
+    python scripts/process_images.py --output-dir ./custom_output --limit 5
 """
 
 import os
@@ -37,7 +41,62 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.cvimage import CVImage
-from src.config import AppConfig
+
+# Simple config class for process_images.py
+class ProcessConfig:
+    """Simplified configuration for image processing script."""
+    def __init__(self, config_dict: dict):
+        # Data paths
+        self.data_root = config_dict['data']['root']
+        self.data_metadata = config_dict['data']['metadata']
+        
+        # Execution settings
+        exec_cfg = config_dict.get('execution', {})
+        self.folder = exec_cfg.get('folder', None)
+        self.all = exec_cfg.get('all', True)
+        self.output_dir = exec_cfg.get('output_dir', './script_output')
+        self.mode = exec_cfg.get('mode', 'final')
+        self.limit = exec_cfg.get('limit', None)
+        self.workers = exec_cfg.get('workers', cpu_count())
+        self.no_parallel = exec_cfg.get('no_parallel', False)
+        
+        # Preprocessing parameters
+        self.img_height = config_dict['preprocessing']['img_height']
+        self.img_width = config_dict['preprocessing']['img_width']
+        self.padding = config_dict['preprocessing']['padding']
+        self.image_type = config_dict['preprocessing']['image_type']
+        self.npoints = config_dict['preprocessing']['npoints']
+        self.target_ppm = config_dict['preprocessing']['target_ppm']
+        self.sagittal_folder_prefixes = config_dict['preprocessing']['sagittal_folder_prefixes']
+        
+        # Parse boundary extension
+        be = config_dict['preprocessing']['boundary_extension']
+        self.cross_section_inward = be['cross_section']['inward']
+        self.cross_section_outward = be['cross_section']['outward']
+        self.sagittal_inward = be['sagittal']['inward']
+        self.sagittal_outward = be['sagittal']['outward']
+    
+    def get_boundary_params(self, folder_id: int) -> tuple:
+        """Get boundary parameters based on folder ID."""
+        if folder_id in self.sagittal_folder_prefixes:
+            return self.sagittal_inward, self.sagittal_outward
+        else:
+            return self.cross_section_inward, self.cross_section_outward
+    
+    @classmethod
+    def load(cls, config_path: str = "Scripts/process_config.yml") -> "ProcessConfig":
+        """Load configuration from YAML file."""
+        import yaml
+        from pathlib import Path
+        
+        path = Path(config_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Configuration file not found at {config_path}")
+        
+        with open(path, 'r') as f:
+            config_dict = yaml.safe_load(f)
+        
+        return cls(config_dict)
 
 
 def get_valid_folders(data_path: Path) -> List[str]:
@@ -112,7 +171,7 @@ def process_image(
     image_path: Path,
     folder_name: str,
     output_dir: Path,
-    config: AppConfig,
+    config: ProcessConfig,
     mode: str,
     metadata: Dict[int, Dict] = None
 ) -> Tuple[bool, Optional[str]]:
@@ -123,8 +182,10 @@ def process_image(
         image_path: Path to the image file
         folder_name: Name of the folder containing the image
         output_dir: Directory to save results
-        config: Application configuration
-        mode: Processing mode ('all' or 'unroll')
+        config: Processing configuration
+        mode: Processing mode ('all' or 'final')
+               - 'all': Save all intermediate processing steps
+               - 'final': Save only the final image specified by config.image_type
         metadata: Optional metadata dict mapping folder_id to {ppm, pixel_type}
         
     Returns:
@@ -141,9 +202,7 @@ def process_image(
         # Get folder-specific boundary parameters
         # Extract folder ID from folder name (e.g., "6_emb" -> 6)
         folder_id = int(folder_name.split('_')[0])
-        boundary_params = config.data.get_boundary_params(folder_id)
-        inward = boundary_params.inward
-        outward = boundary_params.outward
+        inward, outward = config.get_boundary_params(folder_id)
         
         # Get metadata for this folder (PPM scaling)
         source_ppm = None
@@ -151,43 +210,47 @@ def process_image(
             source_ppm = metadata[folder_id].get('ppm', None)
         
         # In 'all' mode, we pass output_dir to CVImage for automatic saving of intermediate steps.
-        # In 'unroll' mode, we do NOT pass output_dir, so CVImage doesn't save anything automatically.
+        # In 'final' mode, we do NOT pass output_dir, so CVImage doesn't save anything automatically.
         cv_image_output_dir = folder_output_dir if mode == 'all' else None
         
         # Create CVImage instance with folder-specific parameters
         cv_image = CVImage(
             I=I,
             id=id,
-            size=(config.data.img_height, config.data.img_width),
-            padding=config.data.padding,
+            size=(config.img_height, config.img_width),
+            padding=config.padding,
             plot_images=False,
-            npoints=config.data.npoints,
+            npoints=config.npoints,
             inward=inward,
             outward=outward,
             output_dir=cv_image_output_dir,
             filename_stem=image_path.stem,
             source_ppm=source_ppm,
-            target_ppm=config.data.ppm
+            target_ppm=config.target_ppm
         )
         
-        # Process through all stages and get the final unrolled image
-        Inl = cv_image.get_unrolled_image()
+        # Get the image based on the configured image type
+        img = cv_image.get_image(image_type=config.image_type)
         
-        # Validate output dimensions
-        expected_depth = abs(inward) + abs(outward)
-        if Inl is None:
-            return False, "Unrolling failed - no output"
+        if img is None:
+            return False, "Image processing failed - no output"
         
-        if Inl.shape[0] != expected_depth:
-            return False, f"Unexpected depth: {Inl.shape[0]} != {expected_depth}"
-        
-        # In 'unroll' mode, we need to explicitly save the final result
-        if mode == 'unroll':
-            output_filename = f"{image_path.stem}_unrolled.png"
+        # In 'final' mode, we need to explicitly save the final result
+        # (In 'all' mode, intermediate images are already saved by CVImage)
+        if mode == 'final' or (mode == 'all' and config.image_type != 'unrolled'):
+            # Create appropriate suffix based on image type
+            suffix_map = {
+                'original': 'original',
+                'segmented': 'segmented', 
+                'nuclear_layer': 'nuclear_layer',
+                'unrolled': 'unrolled'
+            }
+            suffix = suffix_map.get(config.image_type, config.image_type)
+            output_filename = f"{image_path.stem}_{suffix}.png"
             output_path = folder_output_dir / output_filename
             
             # Squeeze channel dimension if needed
-            img_to_save = Inl.squeeze() if Inl.shape[2] == 1 else Inl
+            img_to_save = img.squeeze() if len(img.shape) == 3 and img.shape[2] == 1 else img
             cv.imwrite(str(output_path), img_to_save)
             
         return True, None
@@ -200,7 +263,7 @@ def process_folder(
     data_path: Path,
     folder_name: str,
     output_dir: Path,
-    config: AppConfig,
+    config: ProcessConfig,
     mode: str,
     metadata: Dict[int, Dict] = None,
     limit: Optional[int] = None
@@ -212,8 +275,8 @@ def process_folder(
         data_path: Path to the data directory
         folder_name: Name of folder to process
         output_dir: Output directory for results
-        config: Application configuration
-        mode: Processing mode ('all' or 'unroll')
+        config: Processing configuration
+        mode: Processing mode ('all' or 'final')
         metadata: Optional metadata dict mapping folder_id to {ppm, pixel_type}
         limit: Optional limit on number of images to process
         
@@ -295,7 +358,7 @@ def process_folder(
     return stats
 
 
-def process_folder_wrapper(args: Tuple[Path, str, Path, AppConfig, str, Dict[int, Dict], Optional[int]]) -> Dict[str, any]:
+def process_folder_wrapper(args: Tuple[Path, str, Path, ProcessConfig, str, Dict[int, Dict], Optional[int]]) -> Dict[str, any]:
     """
     Wrapper function for multiprocessing pool.
     
@@ -312,88 +375,118 @@ def process_folder_wrapper(args: Tuple[Path, str, Path, AppConfig, str, Dict[int
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(
-        description='Image processing pipeline with support for full debug output or unrolled-only output',
+        description='Image processing pipeline - all settings can be configured in process_config.yml',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
         Examples:
-        # Process a single folder (save all intermediates)
-        python scripts/process_images.py --folder "6_emb" --output-dir ./output/full --mode all
+        # Run with default config
+        python scripts/process_images.py
         
-        # Process all folders (save only unrolled)
-        python scripts/process_images.py --all --output-dir ./output/unrolled --mode unroll
+        # Run with custom config file
+        python scripts/process_images.py --config my_config.yml
         
-        # Process limited number of images
-        python scripts/process_images.py --all --limit 3 --output-dir ./output/quick_test
+        # Override config settings via command line
+        python scripts/process_images.py --folder "34_" --mode all
+        python scripts/process_images.py --output-dir ./custom_output --limit 5
         """
     )
     
     parser.add_argument(
+        '--config',
+        type=str,
+        default='scripts/process_config.yml',
+        help='Path to configuration file (default: scripts/process_config.yml)'
+    )
+    parser.add_argument(
         '--folder',
         type=str,
-        help='Process a single folder by name (e.g., "6_emb")'
+        default=None,
+        help='Process a single folder by name (overrides config)'
     )
     parser.add_argument(
         '--all',
         action='store_true',
-        help='Process all valid data folders'
+        default=None,
+        help='Process all valid data folders (overrides config)'
     )
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='./script_output',
-        help='Output directory for images (default: ./script_output)'
+        default=None,
+        help='Output directory for images (overrides config)'
     )
     parser.add_argument(
         '--mode',
         type=str,
-        choices=['all', 'unroll'],
-        default='unroll',
-        help='Processing mode: "all" (save all intermediate steps) or "unroll" (save only final output). Default: unroll'
+        choices=['all', 'final'],
+        default=None,
+        help='Processing mode (overrides config)'
     )
     parser.add_argument(
         '--limit',
         type=int,
-        help='Limit number of images per folder (useful for quick tests)'
+        default=None,
+        help='Limit number of images per folder (overrides config)'
     )
     parser.add_argument(
         '--workers',
         type=int,
-        default=cpu_count(),
-        help=f'Number of parallel workers for folder processing (default: {cpu_count()} = CPU count)'
+        default=None,
+        help='Number of parallel workers (overrides config)'
     )
     parser.add_argument(
         '--no-parallel',
         action='store_true',
-        help='Disable parallel processing (process folders sequentially)'
+        default=None,
+        help='Disable parallel processing (overrides config)'
     )
     
     args = parser.parse_args()
     
-    # Validate arguments
-    if not args.folder and not args.all:
-        parser.error("Must specify either --folder or --all")
-    
-    if args.folder and args.all:
-        parser.error("Cannot specify both --folder and --all")
-    
     # Load configuration
-    print("Loading configuration...")
+    print(f"Loading configuration from: {args.config}")
     try:
-        config = AppConfig.load()
+        config = ProcessConfig.load(args.config)
     except Exception as e:
         print(f"Error loading config: {e}")
         sys.exit(1)
     
+    # Override config with command line arguments (if provided)
+    if args.folder is not None:
+        config.folder = args.folder
+        config.all = False
+    if args.all is not None and args.all:
+        config.all = True
+        config.folder = None
+    if args.output_dir is not None:
+        config.output_dir = args.output_dir
+    if args.mode is not None:
+        config.mode = args.mode
+    if args.limit is not None:
+        config.limit = args.limit
+    if args.workers is not None:
+        config.workers = args.workers
+    if args.no_parallel is not None:
+        config.no_parallel = args.no_parallel
+    
+    # Validate settings
+    if not config.folder and not config.all:
+        parser.error("Must specify either --folder or --all (in config or command line)")
+    
+    if config.folder and config.all:
+        parser.error("Cannot specify both --folder and --all")
+    
     # Create output directory (delete if exists for clean slate)
-    output_dir = Path(args.output_dir)
+    output_dir = Path(config.output_dir)
     if output_dir.exists():
         print(f"Removing existing output directory: {output_dir}")
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Get data path from config
-    data_path = Path(config.data.path)
+    data_path = Path(config.data_root)
     print(f"Loading data from: {data_path}")
+    print(f"Image type to save: {config.image_type}")
     
     if not data_path.exists():
         print(f"Error: Data path does not exist: {data_path}")
@@ -401,10 +494,10 @@ def main():
     
     # Load metadata if available
     metadata = {}
-    if hasattr(config.data, 'metadata_path') and config.data.metadata_path:
+    if config.data_metadata:
         try:
             import csv
-            with open(config.data.metadata_path, 'r') as f:
+            with open(config.data_metadata, 'r') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     filename = row['Filename']
@@ -428,26 +521,26 @@ def main():
             metadata = {}
     
     # Get folders to process
-    if args.folder:
+    if config.folder:
         # Support partial folder name matching
         valid_folders = get_valid_folders(data_path)
         
         # First try exact match
-        if args.folder in valid_folders:
-            folders_to_process = [args.folder]
+        if config.folder in valid_folders:
+            folders_to_process = [config.folder]
         else:
             # Try prefix match (case-insensitive) - folder must START with the pattern
-            matching_folders = [f for f in valid_folders if f.lower().startswith(args.folder.lower())]
+            matching_folders = [f for f in valid_folders if f.lower().startswith(config.folder.lower())]
             
             if not matching_folders:
-                print(f"Error: No folder starting with '{args.folder}' found")
+                print(f"Error: No folder starting with '{config.folder}' found")
                 print(f"Valid folders: {', '.join(valid_folders)}")
                 sys.exit(1)
             elif len(matching_folders) == 1:
                 folders_to_process = matching_folders
                 print(f"Matched folder: {matching_folders[0]}")
             else:
-                print(f"Error: Multiple folders match '{args.folder}':")
+                print(f"Error: Multiple folders match '{config.folder}':")
                 for f in matching_folders:
                     print(f"  - {f}")
                 print(f"\nPlease be more specific.")
@@ -457,12 +550,12 @@ def main():
         print(f"Found {len(folders_to_process)} valid folders")
     
     # Process folders
-    print(f"\nStarting processing in '{args.mode}' mode with {args.workers if not args.no_parallel else 1} worker(s)...")
+    print(f"\nStarting processing in '{config.mode}' mode with {config.workers if not config.no_parallel else 1} worker(s)...")
     overall_start_time = time.time()
     
     all_stats = []
     
-    if args.no_parallel or len(folders_to_process) == 1:
+    if config.no_parallel or len(folders_to_process) == 1:
         # Sequential processing
         for folder_name in folders_to_process:
             stats = process_folder(
@@ -470,19 +563,19 @@ def main():
                 folder_name=folder_name,
                 output_dir=output_dir,
                 config=config,
-                mode=args.mode,
+                mode=config.mode,
                 metadata=metadata,
-                limit=args.limit
+                limit=config.limit
             )
             all_stats.append(stats)
     else:
         # Parallel processing with multiprocessing
         pool_args = [
-            (data_path, folder_name, output_dir, config, args.mode, metadata, args.limit)
+            (data_path, folder_name, output_dir, config, config.mode, metadata, config.limit)
             for folder_name in folders_to_process
         ]
         
-        with Pool(processes=args.workers) as pool:
+        with Pool(processes=config.workers) as pool:
             all_stats = pool.map(process_folder_wrapper, pool_args)
     
     overall_elapsed_time = time.time() - overall_start_time
@@ -497,7 +590,7 @@ def main():
     total_failed = sum(s['failed'] for s in all_stats)
     overall_success_rate = 100 * total_success / total_images if total_images > 0 else 0
     
-    print(f"Mode:              {args.mode}")
+    print(f"Mode:              {config.mode}")
     print(f"Folders processed: {len(all_stats)}")
     print(f"Total images:      {total_images}")
     print(f"Successful:        {total_success} ({overall_success_rate:.1f}%)")
@@ -506,35 +599,36 @@ def main():
     print(f"  Overall time:    {overall_elapsed_time:.2f}s ({overall_elapsed_time/60:.2f} min)")
     if total_images > 0:
         print(f"  Time per image:  {overall_elapsed_time/total_images:.2f}s")
-    print(f"  Workers used:    {args.workers if not args.no_parallel else 1}")
+    print(f"  Workers used:    {config.workers if not config.no_parallel else 1}")
     print(f"\nOutput saved to: {output_dir.absolute()}")
     
     # Save summary as JSON
     summary_path = output_dir / 'summary.json'
     summary_data = {
         'config': {
-            'data_path': str(config.data.path),
-            'img_size': (config.data.img_height, config.data.img_width),
-            'padding': config.data.padding,
-            'npoints': config.data.npoints,
+            'data_path': str(config.data_root),
+            'image_type': config.image_type,
+            'img_size': (config.img_height, config.img_width),
+            'padding': config.padding,
+            'npoints': config.npoints,
             'boundary_extension': {
                 'cross_section': {
-                    'inward': config.data.cross_section.inward,
-                    'outward': config.data.cross_section.outward
+                    'inward': config.cross_section_inward,
+                    'outward': config.cross_section_outward
                 },
                 'sagittal': {
-                    'inward': config.data.sagittal.inward,
-                    'outward': config.data.sagittal.outward
+                    'inward': config.sagittal_inward,
+                    'outward': config.sagittal_outward
                 }
             },
-            'sagittal_folder_prefixes': config.data.sagittal_folder_prefixes,
-            'mode': args.mode
+            'sagittal_folder_prefixes': config.sagittal_folder_prefixes,
+            'mode': config.mode
         },
         'timing': {
             'overall_time_seconds': overall_elapsed_time,
             'overall_time_minutes': overall_elapsed_time / 60,
             'time_per_image_seconds': overall_elapsed_time / total_images if total_images > 0 else 0,
-            'workers_used': args.workers if not args.no_parallel else 1
+            'workers_used': config.workers if not config.no_parallel else 1
         },
         'overall': {
             'folders': len(all_stats),

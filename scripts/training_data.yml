@@ -6,7 +6,7 @@
 data_path: "/Volumes/X2/Projects/phd/staging/data/live_data2"
 
 # Output directory for prepared data
-output_path: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented2"
+output_path: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented10"
 
 # Number of synthetic images to generate per adjacent image pair
 # Higher values = more augmented data but longer processing time
@@ -18,8 +18,19 @@ test_ids: [21, 22]
 # Validation folder IDs (these will be copied without augmentation)
 val_ids: [6, 34]
 
+# Ignore folders
+ignore_ids: [31]
+
 # Random seed for reproducibility
 seed: 42
+
+# ==============================================================================
+# Parallel Processing Configuration
+# ==============================================================================
+# Enable parallel processing to speed up data preparation
+parallel_processing:
+  enable: true              # Toggle parallel processing on/off
+  num_workers: null         # Number of parallel workers (null = auto-detect CPU count)
 
 # Metadata CSV file path (optional, for PPM scaling)
 metadata_path: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
@@ -53,15 +64,21 @@ unroll_params:
   # Set to a number (e.g., 1.0) to enable PPM normalization
   target_ppm: null
 
-  # Nuclear layer boundary extension - Different for cross-section vs sagittal
-  # Folders 6_ and 7_ are sagittal images; all others are cross-section
+  # Final image height after unrolling
+  # If unrolled image is shorter, top border will be extended with top pixel row
+  # If unrolled image is taller, an error will be raised
+  # Set to null to disable height enforcement
+  final_image_height: 128
+
+  # Nuclear layer boundary extension
+  # Different settings for cross-section vs sagittal views
   boundary_extension:
     cross_section:
-      outward: -20    # Negative → extends outward → outer edge
-      inward: 44      # Positive → extends inward → inner edge
+      outward: -28  # Negative → extends outward (away from center) → outer edge
+      inward: 100    # Positive → extends inward (toward center) → inner edge
     sagittal:
-      outward: -30
-      inward: 34
+      outward: -20
+      inward: 70
 
   # Define which folder prefixes are sagittal (all others are cross-section)
   sagittal_folder_prefixes: [6, 7, 40, 41, 42, 43]

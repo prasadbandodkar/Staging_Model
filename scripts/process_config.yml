@@ -1,0 +1,63 @@
+# ==============================================================================
+# Image Processing Configuration
+# ==============================================================================
+# Configuration file for process_images.py script
+# Separate from model training config for independent preprocessing pipeline
+# ==============================================================================
+
+# --- Data Paths ---
+data:
+  root: "/Volumes/X2/Projects/phd/staging/data/live_data2/"
+  metadata: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
+
+# --- Execution Settings ---
+execution:
+  # Folder selection (choose one)
+  folder: "43_"   # Process a single folder by name (e.g., "34_" or "6_emb")
+                 # Set to null to use 'all' setting
+  all: false      # Process all valid data folders (only used if folder is null)
+  
+  # Output settings
+  output_dir: "../data/test"  # Directory to save processed images
+  
+  # Processing mode
+  mode: "final"  # Options: "all" (save all intermediate steps) or "final" (save only configured image type)
+  
+  # Processing limits and parallelization
+  limit: null    # Limit number of images per folder (null = process all)
+  workers: 4     # Number of parallel workers (use 1 for sequential processing)
+  no_parallel: false  # Set to true to disable parallel processing
+
+# --- Image Preprocessing Parameters ---
+preprocessing:
+  # Target dimensions for resized image
+  img_height: 1024
+  img_width: 1024
+  padding: 44
+  
+  # Image type to save
+  # Options: 
+  #   - original: Original image (resized, no padding, no preprocessing)
+  #   - segmented: Segmented embryo with background removed
+  #   - nuclear_layer: Binary mask of nuclear layer region
+  #   - unrolled: Unrolled nuclear layer (flat representation)
+  image_type: "unrolled"
+  
+  # Unrolling parameters
+  npoints: 60  # Number of points for contour representation
+  
+  # Nuclear layer boundary extension
+  # Different settings for cross-section vs sagittal views
+  boundary_extension:
+    cross_section:
+      outward: -28  # Negative → extends outward (away from center) → outer edge
+      inward: 100    # Positive → extends inward (toward center) → inner edge
+    sagittal:
+      outward: -20
+      inward: 70
+
+  # Folder classification (sagittal folders use different boundary params)
+  sagittal_folder_prefixes: [6, 7, 40, 41, 42, 43]
+  
+  # PPM normalization (pixels per micron)
+  target_ppm: null  # Target pixels-per-micron (null = no normalization)

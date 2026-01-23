@@ -175,94 +175,67 @@ class CVImage:
         return Img
     
     
-    def _detect_and_correct_illumination(self, Img: npt.NDArray[np.uint8]) -> Tuple[npt.NDArray[np.uint8], float, bool]:
+    def _correct_illumination(self, Img: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         """
-        Detect uneven illumination and apply flat-field correction if needed.
+        Apply flat-field correction to remove uneven illumination.
         
-        Uses quadrant analysis to detect illumination gradients and applies
-        the gold-standard flat-field correction formula from microscopy:
+        Always applies correction to ensure uniform illumination across all images.
+        Two-stage approach:
+        1. Flat-field correction: Removes large-scale illumination gradients
+        2. CLAHE: Enhances local contrast for residual dark regions
+        
+        Uses large Gaussian blur to estimate smooth background illumination pattern,
+        then applies the microscopy flat-field correction formula:
         Corrected = (Image - Dark) / (Flat - Dark) × Mean(Flat)
+        
+        Then applies CLAHE for local contrast enhancement to handle extreme cases.
         
         Args:
             Img: Input grayscale image (uint8)
         
         Returns:
-            Tuple of (corrected_image, illumination_cv, was_corrected)
-                - corrected_image: Image with correction applied (if needed)
-                - illumination_cv: Coefficient of variation for illumination
-                - was_corrected: Boolean indicating if correction was applied
+            Corrected image with uniform illumination (uint8)
         """
-        # Detect uneven illumination by analyzing intensity gradients
-        # Split image into quadrants and compare their mean intensities
         h, w = Img.shape
-        q1 = np.mean(Img[0:h//2, 0:w//2])
-        q2 = np.mean(Img[0:h//2, w//2:w])
-        q3 = np.mean(Img[h//2:h, 0:w//2])
-        q4 = np.mean(Img[h//2:h, w//2:w])
-        quadrant_std = np.std([q1, q2, q3, q4])
-        quadrant_mean = np.mean([q1, q2, q3, q4])
         
-        # Coefficient of variation: normalized measure of illumination uniformity
-        # Values > 0.30 indicate significant uneven illumination
-        # Conservative threshold to avoid edge artifacts from correction
-        illumination_cv = quadrant_std / (quadrant_mean + 1e-6)
+        # ========================================================================
+        # STAGE 1: Flat-Field Correction
+        # ========================================================================
+        # Use large kernel size (1/2 of image dimension) to capture illumination gradients  
+        kernel_size = max(h, w) // 2
+        # Ensure it's odd and reasonably sized
+        kernel_size = max(51, min(kernel_size, 201))
+        if kernel_size % 2 == 0:
+            kernel_size += 1
         
-        was_corrected = False
-        corrected_img = Img.copy()
+        # Estimate background illumination using very large Gaussian blur
+        # Large sigma ensures we only capture the low-frequency illumination pattern
+        sigma = kernel_size / 3.0
+        background = cv.GaussianBlur(Img.astype(np.float32), (kernel_size, kernel_size), sigma)
         
-        if illumination_cv > 0.30:
-            # Apply flat-field correction using morphological opening
-            # Use center-weighted blending to avoid edge artifacts
-            # Use a very conservative kernel size (1/6 of image dimension)
-            kernel_size = max(h, w) // 6
-            # Ensure it's odd and reasonably sized
-            kernel_size = max(11, min(kernel_size, 41))
-            if kernel_size % 2 == 0:
-                kernel_size += 1
-            
-            # Estimate background illumination using morphological opening
-            # Opening removes small bright features, leaving only the background illumination pattern
-            se = cv.getStructuringElement(cv.MORPH_ELLIPSE, (kernel_size, kernel_size))
-            background = cv.morphologyEx(Img, cv.MORPH_OPEN, se)
-            
-            # Apply Gaussian blur to smooth the background estimate
-            blur_size = kernel_size // 2
-            if blur_size % 2 == 0:
-                blur_size += 1
-            background = cv.GaussianBlur(background.astype(np.float32), (blur_size, blur_size), 0)
-            
-            # Dark frame: use 1st percentile as estimate
-            dark_frame = np.percentile(Img, 1)
-            
-            # Apply flat-field correction formula
-            bg_mean = np.mean(background)
-            denominator = background - dark_frame
-            denominator = np.where(denominator < 1, 1, denominator)
-            
-            corrected = ((Img.astype(np.float32) - dark_frame) / denominator) * bg_mean
-            corrected = np.clip(corrected, 0, 255).astype(np.uint8)
-            
-            # Create center-weighted blending mask
-            # Full correction in center, no correction at edges, smooth transition
-            # Use a 2D Gaussian centered on the image
-            y_center, x_center = h // 2, w // 2
-            y_grid, x_grid = np.ogrid[:h, :w]
-            
-            # Gaussian falloff - stronger in center, weaker at edges
-            # sigma controls transition sharpness (larger = smoother transition)
-            sigma_y = h / 3.0  # Covers about 3 sigma = 99.7% of image height
-            sigma_x = w / 3.0
-            
-            gaussian_mask = np.exp(-((y_grid - y_center)**2 / (2 * sigma_y**2) + 
-                                     (x_grid - x_center)**2 / (2 * sigma_x**2)))
-            
-            # Blend: center gets corrected image, edges get original
-            corrected_img = (Img.astype(np.float32) * (1 - gaussian_mask) + 
-                           corrected.astype(np.float32) * gaussian_mask)
-            corrected_img = corrected_img.astype(np.uint8)
-            was_corrected = True
+        # Dark frame: use 1st percentile as estimate of background noise
+        dark_frame = float(np.percentile(Img, 1))
         
-        return corrected_img, illumination_cv, was_corrected
+        # Apply flat-field correction formula
+        bg_mean = np.mean(background)
+        denominator = background - dark_frame
+        # Ensure denominator is always positive and non-zero
+        denominator = np.maximum(denominator, 1.0)
+        
+        corrected = ((Img.astype(np.float32) - dark_frame) / denominator) * bg_mean
+        corrected_img = np.clip(corrected, 0, 255).astype(np.uint8)
+        
+        # ========================================================================
+        # STAGE 2: CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        # ========================================================================
+        # Apply CLAHE for local contrast enhancement
+        # This handles residual uneven illumination and extreme dark regions
+        # clipLimit: threshold for contrast limiting (higher = more aggressive)
+        # tileGridSize: size of grid for histogram equalization (smaller = more local)
+        clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+        corrected_img = clahe.apply(corrected_img)
+        
+        return corrected_img
     
     
     def _segment_embryo_image(self, Img: npt.NDArray) -> npt.NDArray[np.uint8]:
@@ -344,18 +317,15 @@ class CVImage:
             plt.axis('off')
         
         # ========================================================================
-        # STEP 2.5: Uneven Illumination Detection & Flat-Field Correction
-        # Detects and corrects for uneven lighting (common in microscopy)
-        # Uses self-estimated flat field when reference image is unavailable
+        # STEP 2.5: Illumination Correction (Always Applied)
+        # Corrects for uneven lighting using flat-field correction
         # ========================================================================
-        Itmp, illumination_cv, was_corrected = self._detect_and_correct_illumination(Itmp)
+        Itmp = self._correct_illumination(Itmp)
         
         if show_plot:
             plt.subplot(2, 5, 3)
             plt.imshow(Itmp, cmap='gray')
-            cv_text = f'CV={illumination_cv:.3f}'
-            correction_text = ' (Corrected)' if was_corrected else ' (No correction)'
-            plt.title(f'Step 2.5: Illumination Check\n{cv_text}{correction_text}')
+            plt.title('Step 2.5: Illumination Correction')
             plt.axis('off')
         
         # ========================================================================
@@ -405,24 +375,7 @@ class CVImage:
             plt.axis('off')
         
         # ========================================================================
-        # STEP 6: Hole Filling via Flood Fill
-        # Fills any remaining holes by identifying background from corners
-        # ========================================================================
-        Itmp_filled = Itmp.copy()
-        h, w = Itmp.shape[:2]
-        mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
-        cv.floodFill(Itmp_filled, mask, (0, 0), 255)
-        Itmp_filled = cv.bitwise_not(Itmp_filled)
-        Itmp = cv.bitwise_or(Itmp, Itmp_filled)
-        
-        if show_plot:
-            plt.subplot(2, 5, 7)
-            plt.imshow(Itmp, cmap='gray')
-            plt.title('Step 6: Hole Filling')
-            plt.axis('off')
-        
-        # ========================================================================
-        # STEP 7: Extract Largest Connected Component (embryo)
+        # STEP 6: Extract Largest Connected Component (embryo)
         # Removes any remaining small artifacts
         # ========================================================================
         labels = measure.label(Itmp, connectivity=2)
@@ -434,13 +387,13 @@ class CVImage:
             Itmp = np.where(labels == max_label, 255, 0).astype(np.uint8)
         
         if show_plot:
-            plt.subplot(2, 5, 8)
+            plt.subplot(2, 5, 7)
             plt.imshow(Itmp, cmap='gray')
-            plt.title('Step 7: Largest Component')
+            plt.title('Step 6: Largest Component')
             plt.axis('off')
         
         # ========================================================================
-        # STEP 8: Border Expansion
+        # STEP 7: Border Expansion
         # Dilate to ensure border encompasses all nuclei
         # ========================================================================
         if self.border_expansion > 0:
@@ -451,9 +404,9 @@ class CVImage:
             Itmp = cv.dilate(Itmp, se_dilate)
         
         if show_plot:
-            plt.subplot(2, 5, 9)
+            plt.subplot(2, 5, 8)
             plt.imshow(Itmp, cmap='gray')
-            plt.title('Step 8: Final Segmentation')
+            plt.title('Step 7: Final Segmentation')
             plt.axis('off')
         
         # ========================================================================
@@ -665,6 +618,7 @@ class CVImage:
         # Convert to 3D array (add channel dimension)
         I = I[:, :, np.newaxis]
         m, n, o = I.shape
+        
         # Snap border points to valid pixel coordinates
         xext_snapped  = snap_to_pixels(xext, n - 1)
         yext_snapped  = snap_to_pixels(yext, m - 1)
@@ -687,10 +641,38 @@ class CVImage:
         X_t1 = X_t - xL[:, None]
         Y_t1 = Y_t - yL[:, None]
 
-        # Calculate segment widths
+        # Calculate segment widths based on arc length
         dx = np.diff(x_nuc_snapped, axis=0)
         dy = np.diff(y_nuc_snapped, axis=0)
-        ds = np.round(np.sqrt(dx**2 + dy**2)).astype(int)
+        ds_raw = np.sqrt(dx**2 + dy**2)
+        
+        # ========================================================================
+        # Adaptive width smoothing to reduce pole distortion
+        # ========================================================================
+        # Calculate local curvature to identify high-curvature regions (poles)
+        angles = np.arctan2(dy, dx)
+        angle_diffs = np.diff(angles)
+        angle_diffs = np.arctan2(np.sin(angle_diffs), np.cos(angle_diffs))
+        angle_diffs = np.append(angle_diffs, 0)
+        
+        # Curvature: angular change per unit length
+        curvature = np.abs(angle_diffs) / (ds_raw + 1e-6)
+        
+        # Normalize curvature to [0, 1]
+        curv_min = np.percentile(curvature, 25)
+        curv_max = np.percentile(curvature, 75)
+        curvature_norm = np.clip((curvature - curv_min) / (curv_max - curv_min + 1e-6), 0, 1)
+        
+        # Blending strategy: mix actual width with mean width based on curvature
+        # High curvature regions → use more of the mean width
+        # Low curvature regions → use actual arc-length width
+        mean_width = np.mean(ds_raw)
+        blend_factor = curvature_norm * 0.6  # Max 60% blending at high curvature
+        ds = ds_raw * (1 - blend_factor) + mean_width * blend_factor
+        
+        # Round to integers and ensure minimum width
+        ds = np.round(ds).astype(int)
+        ds = np.maximum(ds, 1)
         w = np.sum(ds)
         
         # Initialize output array

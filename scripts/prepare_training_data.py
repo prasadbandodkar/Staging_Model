@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 import pandas as pd
 import numpy as np
+import multiprocessing as mp
+from functools import partial
 import cv2 as cv
 import torch
 from tqdm import tqdm
@@ -138,6 +140,22 @@ def parse_args():
         default=None,
         help="Beta parameter for Beta distribution (overrides config)"
     )
+    parser.add_argument(
+        "--parallel",
+        action='store_true',
+        help="Enable parallel processing (overrides config)"
+    )
+    parser.add_argument(
+        "--no_parallel",
+        action='store_true',
+        help="Disable parallel processing (overrides config)"
+    )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers (overrides config, default: auto-detect)"
+    )
     return parser.parse_args()
 
 
@@ -229,6 +247,29 @@ def unroll_image(
     if unrolled.ndim == 3 and unrolled.shape[2] == 1:
         unrolled = unrolled.squeeze(axis=2)
 
+    # Enforce final image height if specified
+    final_height = unroll_config.get('final_image_height', None)
+    if final_height is not None:
+        current_height = unrolled.shape[0]
+        
+        if current_height > final_height:
+            raise ValueError(
+                f"Unrolled image height ({current_height}) exceeds final_image_height ({final_height}). "
+                f"Folder: {folder_name}, Image ID: {image_id}"
+            )
+        elif current_height < final_height:
+            # Extend top border with top pixel row
+            padding_needed = final_height - current_height
+            unrolled = cv.copyMakeBorder(
+                unrolled,
+                top=padding_needed,
+                bottom=0,
+                left=0,
+                right=0,
+                borderType=cv.BORDER_CONSTANT,
+                value=0
+            )
+
     return unrolled
 
 
@@ -307,9 +348,9 @@ def generate_augmented_images(
     """
     Generate augmented images for a training folder using Data class pipeline.
 
-    For each adjacent pair of images (i, i+1), generates num_augmentations
-    synthetic images using Data.get_random_image_from_folder_idx which uses
-    Beta(0.5, 0.5) distribution for interpolation.
+    For each adjacent pair of images (i, i+1) that forms a valid interpolation pair
+    (matching s, c, z with consecutive t), generates num_augmentations synthetic images
+    using uniform grid sampling (evenly spaced alpha values between 0 and 1).
 
     Args:
         data: Data instance for loading and augmenting images
@@ -362,11 +403,13 @@ def generate_augmented_images(
         cv.imwrite(str(dst_img1_path), I1_processed)
         new_rows.append({'path': f"{folder_name}/{dst_img1_name}", 'id': id1})
 
-        # Generate augmented images using Data class pipeline
-        for aug_idx in range(num_augmentations):
-            # Use Data class method for augmentation (includes Beta sampling and interpolation)
-            I_aug, id_aug = data.get_random_image_from_folder_idx(folder, idx, 'train')
-
+        # Generate augmented images using uniform grid sampling
+        augmented_images = data.get_augmented_images_from_folder_idx(
+            folder, idx, num_augmentations, 'train'
+        )
+        
+        # Save each augmented image
+        for aug_idx, (I_aug, id_aug) in enumerate(augmented_images):
             # Unroll if requested
             if unroll:
                 I_aug_processed = unroll_image(I_aug, id_aug, folder, unroll_config, folder_metadata)
@@ -436,6 +479,60 @@ def load_metadata(metadata_path: Optional[Path]) -> Dict[int, Dict[str, Any]]:
     return metadata
 
 
+def process_single_folder(
+    folder: str,
+    data_loader: Data,
+    output_path: Path,
+    test_ids_set: set,
+    val_ids_set: set,
+    num_augmentations: int,
+    unroll: bool,
+    unroll_config: Optional[Dict[str, Any]],
+    metadata_dict: Dict[int, Dict[str, Any]]
+) -> Tuple[str, bool]:
+    """
+    Process a single folder (for parallel execution).
+
+    Args:
+        folder: Folder name to process
+        data_loader: Data instance for loading images
+        output_path: Base output path
+        test_ids_set: Set of test folder IDs
+        val_ids_set: Set of validation folder IDs
+        num_augmentations: Number of augmentations per pair
+        unroll: Whether to unroll images
+        unroll_config: Configuration for unrolling
+        metadata_dict: Metadata dictionary for folders
+
+    Returns:
+        Tuple of (folder_name, success_status)
+    """
+    try:
+        folder_id = get_folder_id(folder)
+        dst_folder = output_path / folder
+        folder_metadata = metadata_dict.get(folder_id, {})
+
+        if folder_id in test_ids_set:
+            print(f"Test folder: {folder}")
+            copy_folder(data_loader, folder, dst_folder, 'test', unroll=unroll,
+                       unroll_config=unroll_config, folder_metadata=folder_metadata)
+        elif folder_id in val_ids_set:
+            print(f"Validation folder: {folder}")
+            copy_folder(data_loader, folder, dst_folder, 'val', unroll=unroll,
+                       unroll_config=unroll_config, folder_metadata=folder_metadata)
+        else:
+            print(f"Training folder: {folder}")
+            generate_augmented_images(data_loader, folder, dst_folder, num_augmentations,
+                                     unroll=unroll, unroll_config=unroll_config,
+                                     folder_metadata=folder_metadata)
+        return (folder, True)
+    except Exception as e:
+        print(f"Error processing {folder}: {e}")
+        import traceback
+        traceback.print_exc()
+        return (folder, False)
+
+
 def main():
     """Main execution function."""
     args = parse_args()
@@ -469,6 +566,19 @@ def main():
     augment_distribution = args.augment_distribution if args.augment_distribution is not None else config.get('augment_distribution', 'uniform')
     augment_beta_alpha = args.augment_beta_alpha if args.augment_beta_alpha is not None else config.get('augment_beta_alpha', 0.5)
     augment_beta_beta = args.augment_beta_beta if args.augment_beta_beta is not None else config.get('augment_beta_beta', 0.5)
+
+    # Parse parallel processing config
+    parallel_config = config.get('parallel_processing', {})
+    if args.parallel:
+        use_parallel = True
+    elif args.no_parallel:
+        use_parallel = False
+    else:
+        use_parallel = parallel_config.get('enable', False)
+    
+    num_workers = args.num_workers if args.num_workers is not None else parallel_config.get('num_workers', None)
+    if num_workers is None:
+        num_workers = mp.cpu_count()
 
     # Validate required parameters
     if data_path is None:
@@ -510,7 +620,8 @@ def main():
                 'sagittal': {'inward': 34, 'outward': -30}
             }),
             'sagittal_folder_prefixes': unroll_params.get('sagittal_folder_prefixes', [6, 7]),
-            'target_ppm': unroll_params.get('target_ppm', None)  # None disables PPM scaling
+            'target_ppm': unroll_params.get('target_ppm', None),  # None disables PPM scaling
+            'final_image_height': unroll_params.get('final_image_height', None)  # None disables height enforcement
         }
 
         # Load metadata if available
@@ -544,6 +655,9 @@ def main():
     print(f"Test IDs: {sorted(test_ids_set) if test_ids_set else 'None'}")
     print(f"Val IDs: {sorted(val_ids_set) if val_ids_set else 'None'}")
     print(f"Seed: {seed}")
+    print(f"Parallel processing: {use_parallel}")
+    if use_parallel:
+        print(f"Number of workers: {num_workers}")
     print(f"Unroll: {unroll}")
     if unroll:
         target_ppm = unroll_config.get('target_ppm', None)
@@ -557,27 +671,58 @@ def main():
 
     # Process each folder using Data class
     all_folders = data_loader.train_list + data_loader.test_list + data_loader.val_list
+    all_folders_sorted = sorted(all_folders)
 
-    for folder in sorted(all_folders):
-        folder_id = get_folder_id(folder)
-        dst_folder = output_path / folder
+    if use_parallel and len(all_folders_sorted) > 1:
+        # Parallel processing using multiprocessing
+        print(f"Processing {len(all_folders_sorted)} folders in parallel with {num_workers} workers...\n")
+        
+        # Create partial function with fixed arguments
+        process_func = partial(
+            process_single_folder,
+            data_loader=data_loader,
+            output_path=output_path,
+            test_ids_set=test_ids_set,
+            val_ids_set=val_ids_set,
+            num_augmentations=num_augmentations,
+            unroll=unroll,
+            unroll_config=unroll_config,
+            metadata_dict=metadata_dict
+        )
+        
+        # Process folders in parallel
+        with mp.Pool(processes=num_workers) as pool:
+            results = pool.map(process_func, all_folders_sorted)
+        
+        # Check for failures
+        failed_folders = [folder for folder, success in results if not success]
+        if failed_folders:
+            print(f"\n⚠ Warning: {len(failed_folders)} folder(s) failed to process: {failed_folders}")
+    else:
+        # Sequential processing
+        if use_parallel:
+            print("Only one folder to process, using sequential mode...\n")
+        
+        for folder in all_folders_sorted:
+            folder_id = get_folder_id(folder)
+            dst_folder = output_path / folder
 
-        # Get metadata for this folder
-        folder_metadata = metadata_dict.get(folder_id, {})
+            # Get metadata for this folder
+            folder_metadata = metadata_dict.get(folder_id, {})
 
-        if folder_id in test_ids_set:
-            print(f"Test folder: {folder}")
-            copy_folder(data_loader, folder, dst_folder, 'test', unroll=unroll,
-                       unroll_config=unroll_config, folder_metadata=folder_metadata)
-        elif folder_id in val_ids_set:
-            print(f"Validation folder: {folder}")
-            copy_folder(data_loader, folder, dst_folder, 'val', unroll=unroll,
-                       unroll_config=unroll_config, folder_metadata=folder_metadata)
-        else:
-            print(f"Training folder: {folder}")
-            generate_augmented_images(data_loader, folder, dst_folder, num_augmentations,
-                                     unroll=unroll, unroll_config=unroll_config,
-                                     folder_metadata=folder_metadata)
+            if folder_id in test_ids_set:
+                print(f"Test folder: {folder}")
+                copy_folder(data_loader, folder, dst_folder, 'test', unroll=unroll,
+                           unroll_config=unroll_config, folder_metadata=folder_metadata)
+            elif folder_id in val_ids_set:
+                print(f"Validation folder: {folder}")
+                copy_folder(data_loader, folder, dst_folder, 'val', unroll=unroll,
+                           unroll_config=unroll_config, folder_metadata=folder_metadata)
+            else:
+                print(f"Training folder: {folder}")
+                generate_augmented_images(data_loader, folder, dst_folder, num_augmentations,
+                                         unroll=unroll, unroll_config=unroll_config,
+                                         folder_metadata=folder_metadata)
 
     print(f"\n✓ Data preparation complete!")
     print(f"Output saved to: {output_path}")

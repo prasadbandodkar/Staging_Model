@@ -17,7 +17,7 @@ task:
   # Example for num_classes=2: [0.0, 0.5) → class 0, [0.5, 1.0] → class 1
   # Example for num_classes=5: [0.0, 0.2) → class 0, [0.2, 0.4) → class 1, etc.
   classification:
-    num_classes: 5  # Number of classes (IDs are binned into equal intervals)
+    num_classes: 15  # Number of classes (IDs are binned into equal intervals)
     class_names: null  # Optional: ["stage1", "stage2", ...] for logging
 
 
@@ -27,7 +27,7 @@ task:
 data:
   # --- Paths ---
   paths:
-    root: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented/"
+    root: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented10/"
     metadata: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
 
   # --- Dataset Splits ---
@@ -93,14 +93,14 @@ data:
 # MODEL CONFIGURATION
 # ==============================================================================
 model:
-  architecture: "nano"  # Options: nano, tiny, small, medium, large
+  architecture: "tiny"  # Options: nano, tiny, small, medium, large
                          # nano:   <150k params
                          # tiny:   ~700k params
                          # small:  ~11M params (ResNet18-like)
                          # medium: ~25M params (ResNet34-like)
                          # large:  ~45M params (ResNet101-like)
 
-  dropout: 0.25  # Dropout rate for regularization
+  dropout: 0.50  # Dropout rate for regularization
   show_summary: true  # Print model summary at startup
 
 
