@@ -33,7 +33,8 @@ data:
   # --- Dataset Splits ---
   splits:
     test_ids: [40, 42]
-    val_ids: [6, 34]
+    val_ids: [6, 28]
+    ignore_ids: [31]
     # train_ids are automatically determined (all folders not in test/val)
 
   # --- Data Loading ---
@@ -43,7 +44,7 @@ data:
                             # When false: full preprocessing pipeline runs (see preprocessing section)
                             # Requires: augmentation.interpolation.enabled=false
 
-    trunc_width: 128  # Width truncation/cropping applied during loading
+    trunc_width: 256  # Width truncation/cropping applied during loading
                       # Training: random crop, Validation: center crop
                       # Set to null to disable truncation
 
@@ -76,11 +77,11 @@ data:
     # Nuclear layer boundary extension (different for cross-section vs sagittal)
     boundary_extension:
       cross_section:
-        outward: -20  # Negative → extends outward (away from center) → outer edge
-        inward: 44    # Positive → extends inward (toward center) → inner edge
+        outward: -28  # Negative → extends outward (away from center) → outer edge
+        inward: 100    # Positive → extends inward (toward center) → inner edge
       sagittal:
-        outward: -30
-        inward: 34
+        outward: -20
+        inward: 70
 
     # Folder classification
     sagittal_folder_prefixes: [6, 7, 40, 41, 42, 43]
@@ -93,7 +94,7 @@ data:
 # MODEL CONFIGURATION
 # ==============================================================================
 model:
-  architecture: "tiny"  # Options: nano, tiny, small, medium, large
+  architecture: "small"  # Options: nano, tiny, small, medium, large
                          # nano:   <150k params
                          # tiny:   ~700k params
                          # small:  ~11M params (ResNet18-like)

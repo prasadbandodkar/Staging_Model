@@ -46,6 +46,7 @@ class DataSplits:
     """Dataset split configuration."""
     test_ids: List[int]
     val_ids: List[int]
+    ignore_ids: List[int] = field(default_factory=list)
 
 @dataclass
 class DataLoading:
