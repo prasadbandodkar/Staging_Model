@@ -7,6 +7,7 @@
 # Main imports
 import os
 import sys
+import csv
 from typing import Dict, List, Tuple, Optional, Literal
 
 # Data handling imports
@@ -35,9 +36,9 @@ class Data:
                  val: List[int] = [],
                  ignore: List[int] = [],
                  metadata_path: Optional[str] = None,
-                 augment_distribution: str = 'uniform',
-                 augment_beta_alpha: float = 0.5,
-                 augment_beta_beta: float = 0.5) -> None:
+                 augment_distribution: Optional[str] = 'uniform',
+                 augment_beta_alpha: Optional[float] = 0.5,
+                 augment_beta_beta: Optional[float] = 0.5) -> None:
         """
         Initialize the Data handler.
 
@@ -170,8 +171,6 @@ class Data:
         Args:
             metadata_path: Path to metadata CSV file
         """
-        import csv
-        
         try:
             with open(metadata_path, 'r') as f:
                 reader = csv.DictReader(f)

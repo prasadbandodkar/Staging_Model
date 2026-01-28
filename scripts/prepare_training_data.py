@@ -156,6 +156,13 @@ def parse_args():
         default=None,
         help="Number of parallel workers (overrides config, default: auto-detect)"
     )
+    parser.add_argument(
+        "--ignore_ids",
+        type=int,
+        nargs='*',
+        default=None,
+        help="List of folder IDs to ignore (overrides config, e.g., --ignore_ids 31 32)"
+    )
     return parser.parse_args()
 
 
@@ -389,10 +396,9 @@ def generate_augmented_images(
         # Get original filename for naming
         img1_path = df.iloc[idx, 0]  # Full path from id.csv
         base_name1 = Path(img1_path).stem
-        ext1 = Path(img1_path).suffix
 
-        # Process and save first original image
-        dst_img1_name = f"{base_name1}_orig{ext1}"
+        # Process and save first original image (always as PNG)
+        dst_img1_name = f"{base_name1}_orig.png"
         dst_img1_path = dst_folder / dst_img1_name
 
         if unroll:
@@ -432,8 +438,7 @@ def generate_augmented_images(
         # Get original filename
         last_img_path = df.iloc[-1, 0]
         base_name_last = Path(last_img_path).stem
-        ext_last = Path(last_img_path).suffix
-        dst_img_last_name = f"{base_name_last}_orig{ext_last}"
+        dst_img_last_name = f"{base_name_last}_orig.png"
         dst_img_last_path = dst_folder / dst_img_last_name
 
         if unroll:
@@ -560,6 +565,7 @@ def main():
     num_augmentations = args.num_augmentations if args.num_augmentations is not None else config.get('num_augmentations')
     test_ids = args.test_ids if args.test_ids is not None else config.get('test_ids')
     val_ids = args.val_ids if args.val_ids is not None else config.get('val_ids')
+    ignore_ids = args.ignore_ids if args.ignore_ids is not None else config.get('ignore_ids', [])
     seed = args.seed if args.seed is not None else config.get('seed', 42)
     unroll = args.unroll
     metadata_path = args.metadata_path if args.metadata_path is not None else config.get('metadata_path')
@@ -641,9 +647,10 @@ def main():
         augment_beta_beta=augment_beta_beta
     )
 
-    # Get test and val IDs
+    # Get test, val, and ignore IDs
     test_ids_set = set(test_ids) if test_ids else set()
     val_ids_set = set(val_ids) if val_ids else set()
+    ignore_ids_set = set(ignore_ids) if ignore_ids else set()
 
     print(f"\nPreparing training data...")
     print(f"Source: {data_path}")
@@ -654,6 +661,7 @@ def main():
         print(f"Beta parameters: alpha={augment_beta_alpha}, beta={augment_beta_beta}")
     print(f"Test IDs: {sorted(test_ids_set) if test_ids_set else 'None'}")
     print(f"Val IDs: {sorted(val_ids_set) if val_ids_set else 'None'}")
+    print(f"Ignore IDs: {sorted(ignore_ids_set) if ignore_ids_set else 'None'}")
     print(f"Seed: {seed}")
     print(f"Parallel processing: {use_parallel}")
     if use_parallel:
@@ -671,7 +679,16 @@ def main():
 
     # Process each folder using Data class
     all_folders = data_loader.train_list + data_loader.test_list + data_loader.val_list
-    all_folders_sorted = sorted(all_folders)
+    
+    # Filter out ignored folders
+    all_folders_filtered = [folder for folder in all_folders if get_folder_id(folder) not in ignore_ids_set]
+    all_folders_sorted = sorted(all_folders_filtered)
+    
+    # Report if any folders were filtered
+    if ignore_ids_set:
+        ignored_count = len(all_folders) - len(all_folders_filtered)
+        if ignored_count > 0:
+            print(f"Filtered out {ignored_count} folder(s) with ignore_ids")
 
     if use_parallel and len(all_folders_sorted) > 1:
         # Parallel processing using multiprocessing

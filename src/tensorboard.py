@@ -166,9 +166,17 @@ class TensorBoardLogger:
         # Convert to tensor and log
         fig.canvas.draw()
         # Use buffer_rgba() which works across all backends
+        # Note: get_width_height() returns (width, height) but buffer is in (height, width) order
         width, height = fig.canvas.get_width_height()
         img_array = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
-        img_array = img_array.reshape(height, width, 4)
+        # Calculate expected size and reshape accordingly
+        expected_size = width * height * 4
+        if img_array.size != expected_size:
+            # DPI scaling may cause size mismatch, calculate actual dimensions
+            actual_height = img_array.size // (width * 4)
+            img_array = img_array.reshape(actual_height, width, 4)
+        else:
+            img_array = img_array.reshape(height, width, 4)
         # Convert RGBA to RGB
         img_array = img_array[:, :, :3]
         img_tensor = torch.from_numpy(img_array).permute(2, 0, 1) / 255.0
@@ -250,9 +258,17 @@ class TensorBoardLogger:
         # Convert to tensor and log
         fig.canvas.draw()
         # Use buffer_rgba() which works across all backends
+        # Note: get_width_height() returns (width, height) but buffer is in (height, width) order
         width, height = fig.canvas.get_width_height()
         img_array = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
-        img_array = img_array.reshape(height, width, 4)
+        # Calculate expected size and reshape accordingly
+        expected_size = width * height * 4
+        if img_array.size != expected_size:
+            # DPI scaling may cause size mismatch, calculate actual dimensions
+            actual_height = img_array.size // (width * 4)
+            img_array = img_array.reshape(actual_height, width, 4)
+        else:
+            img_array = img_array.reshape(height, width, 4)
         # Convert RGBA to RGB
         img_array = img_array[:, :, :3]
         img_tensor = torch.from_numpy(img_array).permute(2, 0, 1) / 255.0

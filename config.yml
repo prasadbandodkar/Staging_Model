@@ -27,49 +27,43 @@ task:
 data:
   # --- Paths ---
   paths:
-    root: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented10/"
+    root: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented20/"
     metadata: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
 
   # --- Dataset Splits ---
   splits:
-    test_ids: [40, 42]
-    val_ids: [6, 28]
+    test_ids: [40, 35]
+    val_ids: [7, 33]
     ignore_ids: [31]
-    # train_ids are automatically determined (all folders not in test/val)
+    # train_ids are automatically determined (all folders not in test/val/ignore)
+
+  # --- Image Type ---
+  # Indicates the type of images used for training
+  # Options: unrolled, original
+  # Note: The unroll-on-fly pipeline always results in unrolled images
+  image_type: "unrolled"
 
   # --- Data Loading ---
   loading:
-    use_preprocessed: true  # Load pre-processed images (bypass CVImage preprocessing)
-                            # When true: images are already unrolled, only trunc_width applied
-                            # When false: full preprocessing pipeline runs (see preprocessing section)
-                            # Requires: augmentation.interpolation.enabled=false
+    use_unroll_on_fly: false  # When false: load pre-processed unrolled images
+                               # When true: unroll images on-the-fly using unroll_on_fly config
+                               # Requires: unroll_on_fly.augmentation.interpolation.enabled=false
 
-    trunc_width: 256  # Width truncation/cropping applied during loading
+    trunc_width: 1024  # Width truncation/cropping applied during loading
                       # Training: random crop, Validation: center crop
                       # Set to null to disable truncation
 
     num_workers: 4  # Number of dataloader workers (0 = single-threaded)
 
-  # --- Data Augmentation ---
-  augmentation:
-    enabled: false  # Enable/disable all augmentation
-
-    # Interpolation augmentation (randomly blend adjacent images)
-    interpolation:
-      enabled: false  # When true, randomly interpolate between adjacent images
-      distribution: "uniform"  # Options: uniform, beta
-      beta_alpha: 0.5  # Alpha parameter for Beta distribution
-      beta_beta: 0.5   # Beta parameter for Beta distribution
-
-  # --- Image Preprocessing (only used when loading.use_preprocessed=false) ---
-  preprocessing:
-    # Target dimensions
+  # --- Unroll On-The-Fly Configuration ---
+  # Used only when loading.use_unroll_on_fly=true
+  # This pipeline always produces unrolled images
+  unroll_on_fly:
+    # Target dimensions for unrolled images
     img_height: 1024
     img_width: 1024
+    
     padding: 44
-
-    # Image type to use for training
-    image_type: "unrolled"  # Options: original, segmented, nuclear_layer, unrolled
 
     # Unrolling parameters
     npoints: 60  # Number of points for contour representation
@@ -89,19 +83,28 @@ data:
     # PPM normalization
     target_ppm: null  # Target pixels-per-micron (null = no normalization)
 
+    # --- Augmentation Settings ---
+    augmentation_enabled: false  # Enable/disable all augmentation
+
+    # Interpolation augmentation (randomly blend adjacent images)
+    interpolation_enabled: false  # When true, randomly interpolate between adjacent images
+    interpolation_distribution: "uniform"  # Options: uniform, beta
+    interpolation_beta_alpha: 0.5  # Alpha parameter for Beta distribution
+    interpolation_beta_beta: 0.5   # Beta parameter for Beta distribution
+
 
 # ==============================================================================
 # MODEL CONFIGURATION
 # ==============================================================================
 model:
-  architecture: "small"  # Options: nano, tiny, small, medium, large
+  architecture: "tiny"  # Options: nano, tiny, small, medium, large
                          # nano:   <150k params
                          # tiny:   ~700k params
                          # small:  ~11M params (ResNet18-like)
                          # medium: ~25M params (ResNet34-like)
                          # large:  ~45M params (ResNet101-like)
 
-  dropout: 0.50  # Dropout rate for regularization
+  dropout: 0.60  # Dropout rate for regularization
   show_summary: true  # Print model summary at startup
 
 
@@ -111,8 +114,8 @@ model:
 training:
   # --- Optimization ---
   optimizer:
-    learning_rate: 1.0e-4
-    weight_decay: 1.0e-4  # L2 regularization
+    learning_rate: 1.0e-3
+    weight_decay: 1.0e-3  # L2 regularization
 
   # --- Loss Function ---
   loss:
@@ -133,8 +136,8 @@ training:
   regularization:
     grad_clip: 0.0  # Gradient clipping (0.0 = disabled)
 
-  # --- Training Duration ---
-  batch_size: 128
+  # --- Training Duration --- activi
+  batch_size: 256
   epochs: 100
   early_stopping: 100  # Stop if no improvement for N epochs (0 = disabled)
 

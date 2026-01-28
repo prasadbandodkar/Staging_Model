@@ -55,64 +55,54 @@ class DataLoading:
 
     Controls how images are loaded from disk.
     """
-    use_preprocessed: bool  # Load pre-processed images or run preprocessing on-the-fly
+    use_unroll_on_fly: bool  # When False: load pre-processed unrolled images, when True: unroll on-the-fly
     trunc_width: Optional[int]  # Width truncation/cropping (applied during loading)
     num_workers: int  # Number of dataloader workers
 
 @dataclass
-class InterpolationAugmentation:
-    """Interpolation augmentation settings."""
-    enabled: bool
-    distribution: str
-    beta_alpha: float
-    beta_beta: float
-
-@dataclass
-class DataAugmentation:
-    """Data augmentation configuration."""
-    enabled: bool
-    interpolation: InterpolationAugmentation
-
-@dataclass
-class DataPreprocessing:
+class UnrollOnFlyConfig:
     """
-    Image preprocessing configuration.
+    Unroll on-the-fly configuration.
 
-    Only used when loading.use_preprocessed=false.
-    These parameters control the on-the-fly preprocessing pipeline.
+    Only used when loading.use_unroll_on_fly=true.
+    This pipeline always produces unrolled images.
     """
     img_height: int
     img_width: int
     padding: int
-    image_type: Literal['original', 'segmented', 'nuclear_layer', 'unrolled']
     npoints: int
     boundary_extension: Dict[str, Dict[str, int]]
     sagittal_folder_prefixes: List[int]
     target_ppm: Optional[float]
+    augmentation_enabled: bool
+    interpolation_enabled: bool
+    interpolation_distribution: str
+    interpolation_beta_alpha: float
+    interpolation_beta_beta: float
 
 @dataclass
 class DataConfig:
     """
     Data configuration for image processing and dataset splitting.
 
-    Organized by pipeline flow: paths → splits → loading → augmentation → preprocessing
+    Organized by pipeline flow: paths → splits → image_type → loading → unroll_on_fly
     """
     paths: DataPaths
     splits: DataSplits
+    image_type: Literal['unrolled', 'original']
     loading: DataLoading
-    augmentation: DataAugmentation
-    preprocessing: DataPreprocessing
+    unroll_on_fly: UnrollOnFlyConfig
 
     def __post_init__(self):
         """Convert boundary_extension dicts to BoundaryExtension objects and validate configuration."""
-        if isinstance(self.preprocessing.boundary_extension, dict):
-            self.cross_section = BoundaryExtension(**self.preprocessing.boundary_extension['cross_section'])
-            self.sagittal = BoundaryExtension(**self.preprocessing.boundary_extension['sagittal'])
+        if isinstance(self.unroll_on_fly.boundary_extension, dict):
+            self.cross_section = BoundaryExtension(**self.unroll_on_fly.boundary_extension['cross_section'])
+            self.sagittal = BoundaryExtension(**self.unroll_on_fly.boundary_extension['sagittal'])
 
-        # Validate use_preprocessed configuration
-        if self.loading.use_preprocessed and self.augmentation.interpolation.enabled:
+        # Validate use_unroll_on_fly configuration
+        if not self.loading.use_unroll_on_fly and self.unroll_on_fly.interpolation_enabled:
             raise ValueError(
-                "use_preprocessed=True requires augmentation.interpolation.enabled=False. "
+                "use_unroll_on_fly=False requires interpolation_enabled=False. "
                 "When using pre-processed data, augmentation should already be baked into the dataset."
             )
 
@@ -126,7 +116,7 @@ class DataConfig:
         Returns:
             BoundaryExtension object with inward/outward values
         """
-        if folder_id in self.preprocessing.sagittal_folder_prefixes:
+        if folder_id in self.unroll_on_fly.sagittal_folder_prefixes:
             return self.sagittal
         else:
             return self.cross_section
@@ -255,12 +245,9 @@ class AppConfig:
             data=DataConfig(
                 paths=DataPaths(**d['data']['paths']),
                 splits=DataSplits(**d['data']['splits']),
+                image_type=d['data']['image_type'],
                 loading=DataLoading(**d['data']['loading']),
-                augmentation=DataAugmentation(
-                    enabled=d['data']['augmentation']['enabled'],
-                    interpolation=InterpolationAugmentation(**d['data']['augmentation']['interpolation'])
-                ),
-                preprocessing=DataPreprocessing(**d['data']['preprocessing'])
+                unroll_on_fly=UnrollOnFlyConfig(**d['data']['unroll_on_fly'])
             ),
             model=ModelConfig(**d['model']),
             training=TrainingConfig(

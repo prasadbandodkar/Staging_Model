@@ -411,10 +411,10 @@ if __name__ == "__main__":
         model = create_staging_model(model_type=model_type)
         
         # Test with typical nuclear layer dimensions
-        batch_size = 4
+        batch_size = 256
         channels = 1
-        height = 64
-        width = 512
+        height = 128
+        width = 256
         
         get_model_summary(model, (batch_size, channels, height, width))
         

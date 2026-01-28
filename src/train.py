@@ -380,23 +380,49 @@ class Trainer:
         if isinstance(loaded_config, dict):
             # Attempt to upgrade to TrainingConfig if keys match
             try:
-                # Filter keys that exist in TrainingConfig
-                valid_keys = TrainingConfig.__dataclass_fields__.keys()
-                filtered_config = {k: v for k, v in loaded_config.items() if k in valid_keys}
-                # Handle renaming if necessary (e.g. lr -> learning_rate)
-                if 'lr' in loaded_config and 'learning_rate' not in filtered_config:
-                    filtered_config['learning_rate'] = loaded_config['lr']
-                    
-                self.config = TrainingConfig(**filtered_config)
+                from .config import OptimizerConfig, LossConfig, SchedulerConfig, RegularizationConfig
+                
+                # Reconstruct nested dataclasses
+                config_dict = {}
+                
+                # Handle optimizer config
+                if 'optimizer' in loaded_config:
+                    if isinstance(loaded_config['optimizer'], dict):
+                        config_dict['optimizer'] = OptimizerConfig(**loaded_config['optimizer'])
+                    else:
+                        config_dict['optimizer'] = loaded_config['optimizer']
+                
+                # Handle loss config
+                if 'loss' in loaded_config:
+                    if isinstance(loaded_config['loss'], dict):
+                        config_dict['loss'] = LossConfig(**loaded_config['loss'])
+                    else:
+                        config_dict['loss'] = loaded_config['loss']
+                
+                # Handle scheduler config
+                if 'scheduler' in loaded_config:
+                    if isinstance(loaded_config['scheduler'], dict):
+                        config_dict['scheduler'] = SchedulerConfig(**loaded_config['scheduler'])
+                    else:
+                        config_dict['scheduler'] = loaded_config['scheduler']
+                
+                # Handle regularization config
+                if 'regularization' in loaded_config:
+                    if isinstance(loaded_config['regularization'], dict):
+                        config_dict['regularization'] = RegularizationConfig(**loaded_config['regularization'])
+                    else:
+                        config_dict['regularization'] = loaded_config['regularization']
+                
+                # Copy scalar fields
+                for key in ['batch_size', 'epochs', 'early_stopping', 'checkpoint_dir']:
+                    if key in loaded_config:
+                        config_dict[key] = loaded_config[key]
+                
+                self.config = TrainingConfig(**config_dict)
             except Exception as e:
                 print(f"Warning: Could not convert loaded config to TrainingConfig: {e}")
-                # Use a dummy config or fail? 
-                # For now, let's create a default config and update it
-                default_config = asdict(TrainingConfig())
-                default_config.update(loaded_config)
-                # Map old keys
-                if 'lr' in loaded_config: default_config['learning_rate'] = loaded_config['lr']
-                self.config = TrainingConfig(**{k: v for k, v in default_config.items() if k in TrainingConfig.__dataclass_fields__})
+                print(f"Using config as-is. This may cause issues if accessing nested attributes.")
+                self.config = loaded_config
         else:
             self.config = loaded_config
         
@@ -612,20 +638,19 @@ def create_dataloaders(cfg: AppConfig, device: torch.device):
         val=cfg.data.splits.val_ids,
         ignore=cfg.data.splits.ignore_ids,
         type='train',
-        size=(cfg.data.preprocessing.img_height, cfg.data.preprocessing.img_width),
-        padding=cfg.data.preprocessing.padding,
-        npoints=cfg.data.preprocessing.npoints,
-        boundary_extension=cfg.data.preprocessing.boundary_extension,
-        sagittal_folder_prefixes=cfg.data.preprocessing.sagittal_folder_prefixes,
+        size=(cfg.data.unroll_on_fly.img_height, cfg.data.unroll_on_fly.img_width),
+        padding=cfg.data.unroll_on_fly.padding,
+        npoints=cfg.data.unroll_on_fly.npoints,
+        boundary_extension=cfg.data.unroll_on_fly.boundary_extension,
+        sagittal_folder_prefixes=cfg.data.unroll_on_fly.sagittal_folder_prefixes,
         trunc_width=cfg.data.loading.trunc_width,
-        image_type=cfg.data.preprocessing.image_type,
         metadata_path=cfg.data.paths.metadata,
-        target_ppm=cfg.data.preprocessing.target_ppm,
-        data_augment=cfg.data.augmentation.interpolation.enabled,
-        use_preprocessed=cfg.data.loading.use_preprocessed,
-        augment_distribution=cfg.data.augmentation.interpolation.distribution,
-        augment_beta_alpha=cfg.data.augmentation.interpolation.beta_alpha,
-        augment_beta_beta=cfg.data.augmentation.interpolation.beta_beta,
+        target_ppm=cfg.data.unroll_on_fly.target_ppm,
+        data_augment=cfg.data.unroll_on_fly.interpolation_enabled,
+        use_unroll_on_fly=cfg.data.loading.use_unroll_on_fly,
+        augment_distribution=cfg.data.unroll_on_fly.interpolation_distribution,
+        augment_beta_alpha=cfg.data.unroll_on_fly.interpolation_beta_alpha,
+        augment_beta_beta=cfg.data.unroll_on_fly.interpolation_beta_beta,
         task_type=cfg.task.type,
         num_classes=cfg.task.classification.num_classes
     )
@@ -636,20 +661,19 @@ def create_dataloaders(cfg: AppConfig, device: torch.device):
         val=cfg.data.splits.val_ids,
         ignore=cfg.data.splits.ignore_ids,
         type='val',
-        size=(cfg.data.preprocessing.img_height, cfg.data.preprocessing.img_width),
-        padding=cfg.data.preprocessing.padding,
-        npoints=cfg.data.preprocessing.npoints,
-        boundary_extension=cfg.data.preprocessing.boundary_extension,
-        sagittal_folder_prefixes=cfg.data.preprocessing.sagittal_folder_prefixes,
+        size=(cfg.data.unroll_on_fly.img_height, cfg.data.unroll_on_fly.img_width),
+        padding=cfg.data.unroll_on_fly.padding,
+        npoints=cfg.data.unroll_on_fly.npoints,
+        boundary_extension=cfg.data.unroll_on_fly.boundary_extension,
+        sagittal_folder_prefixes=cfg.data.unroll_on_fly.sagittal_folder_prefixes,
         trunc_width=cfg.data.loading.trunc_width,
-        image_type=cfg.data.preprocessing.image_type,
         metadata_path=cfg.data.paths.metadata,
-        target_ppm=cfg.data.preprocessing.target_ppm,
-        data_augment=cfg.data.augmentation.interpolation.enabled,
-        use_preprocessed=cfg.data.loading.use_preprocessed,
-        augment_distribution=cfg.data.augmentation.interpolation.distribution,
-        augment_beta_alpha=cfg.data.augmentation.interpolation.beta_alpha,
-        augment_beta_beta=cfg.data.augmentation.interpolation.beta_beta,
+        target_ppm=cfg.data.unroll_on_fly.target_ppm,
+        data_augment=cfg.data.unroll_on_fly.interpolation_enabled,
+        use_unroll_on_fly=cfg.data.loading.use_unroll_on_fly,
+        augment_distribution=cfg.data.unroll_on_fly.interpolation_distribution,
+        augment_beta_alpha=cfg.data.unroll_on_fly.interpolation_beta_alpha,
+        augment_beta_beta=cfg.data.unroll_on_fly.interpolation_beta_beta,
         task_type=cfg.task.type,
         num_classes=cfg.task.classification.num_classes
     )
@@ -725,7 +749,7 @@ def train_model(cfg: AppConfig, resume_from: str = None, run_name: str = None):
     print("\nConfiguration loaded from config.yml")
 
     # Create dataloaders
-    train_loader, val_loader, _, _ = create_dataloaders(cfg, device)
+    train_loader, val_loader, train_dataset, val_dataset = create_dataloaders(cfg, device)
 
     # Create model
     print("\nCreating model...")
@@ -739,9 +763,20 @@ def train_model(cfg: AppConfig, resume_from: str = None, run_name: str = None):
 
     # Print model summary if requested
     if cfg.model.show_summary:
+        # Load a sample image to determine actual input dimensions
+        print("\nDetermining input dimensions from sample image...")
+        
+        # Get one sample image from the already-created train_dataset
+        sample_image, _, _ = train_dataset[0]
+        
+        # Extract dimensions: (C, H, W)
+        _, img_height, img_width = sample_image.shape
+        
+        print(f"  Actual input dimensions: {img_height}×{img_width}")
+        
         get_model_summary(
             model,
-            (cfg.training.batch_size, 1, cfg.data.preprocessing.img_height, cfg.data.preprocessing.img_width)
+            (cfg.training.batch_size, 1, img_height, img_width)
         )
 
     # Update training config to use run-specific checkpoint directory
