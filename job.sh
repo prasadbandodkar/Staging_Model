@@ -2,9 +2,9 @@
 ## Run as sbatch job.sh
 ##SBATCH directives specify resource requirements
 
-#SBATCH --job-name=staging_nano        # Job name
-#SBATCH --time=00:15:00                 # Wall time limit (HH:MM:SS) - max 4 days for gpu queue
-#SBATCH --ntasks=1                     # Number of tasks (processes)
+#SBATCH --job-name=staging_small        # Job name
+#SBATCH --time=10:00:00                 # Wall time limit (HH:MM:SS) - max 4 days for gpu queue
+#SBATCH --ntasks=4                     # Number of tasks (processes)
 #SBATCH --mem=12G                      # Total memory for the job
 #SBATCH --gres=gpu:t4:1                   # Request 1 GPU (any available type)
 #SBATCH --partition=gpu                # Submit to GPU partition
@@ -48,17 +48,8 @@ nvidia-smi
 cd $SCRATCH/staging/Staging_Model
 
 # Run your training script
-uv run --frozen python main.py --mode train
+.venv/bin/python main.py --mode train
 
 echo "Job finished at $(date)"
 
-# Move output and error files to the latest run directory
-# Find the latest run directory (sorted by time)
-LATEST_RUN=$(ls -td runs/run_* | head -1)
 
-if [ -d "$LATEST_RUN" ]; then
-    echo "Moving log files to $LATEST_RUN"
-    # Move and rename with .txt extension (avoiding collision)
-    mv "runs/staging_${SLURM_JOB_ID}.out" "$LATEST_RUN/staging_${SLURM_JOB_ID}_out.txt"
-    mv "runs/staging_${SLURM_JOB_ID}.err" "$LATEST_RUN/staging_${SLURM_JOB_ID}_err.txt"
-fi

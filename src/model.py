@@ -11,13 +11,58 @@ import torch.nn.functional as F
 from typing import Optional, Tuple
 
 
+class SEBlock(nn.Module):
+    """
+    Squeeze-and-Excitation block for channel attention.
+    
+    Adaptively recalibrates channel-wise feature responses by explicitly
+    modeling interdependencies between channels.
+    """
+    
+    def __init__(self, channels: int, reduction: int = 16):
+        """
+        Initialize the SE block.
+        
+        Args:
+            channels: Number of input channels
+            reduction: Reduction ratio for the bottleneck (default: 16)
+        """
+        super(SEBlock, self).__init__()
+        self.squeeze = nn.AdaptiveAvgPool2d(1)
+        self.excitation = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the SE block.
+        
+        Args:
+            x: Input tensor of shape (B, C, H, W)
+            
+        Returns:
+            Channel-wise recalibrated tensor of shape (B, C, H, W)
+        """
+        b, c, _, _ = x.size()
+        # Squeeze: global spatial information
+        y = self.squeeze(x).view(b, c)
+        # Excitation: channel-wise attention weights
+        y = self.excitation(y).view(b, c, 1, 1)
+        # Scale: apply attention weights
+        return x * y.expand_as(x)
+
+
 
 class ResidualBlock(nn.Module):
     """
-    Residual block with two convolutional layers and a skip connection.
+    Pre-activation residual block with GroupNorm, GELU, and SE attention.
     
-    Implements the basic building block commonly used in ResNet architectures,
-    with batch normalization and ReLU activation.
+    Uses pre-activation design (BN→ReLU→Conv) for better gradient flow,
+    GroupNorm for batch-size independence, GELU for smoother gradients,
+    and Squeeze-Excitation for channel-wise attention.
     """
     
     def __init__(
@@ -25,37 +70,47 @@ class ResidualBlock(nn.Module):
         in_channels: int, 
         out_channels: int, 
         stride: int = 1, 
-        downsample: Optional[nn.Module] = None
+        downsample: Optional[nn.Module] = None,
+        num_groups: int = 32
     ):
         """
-        Initialize the residual block.
+        Initialize the pre-activation residual block.
         
         Args:
             in_channels: Number of input channels
             out_channels: Number of output channels
             stride: Stride for the first convolution (default: 1)
             downsample: Optional downsampling layer for the skip connection
+            num_groups: Number of groups for GroupNorm (default: 32)
         """
         super(ResidualBlock, self).__init__()
         
+        # Adjust num_groups if channels are too small
+        num_groups = min(num_groups, out_channels)
+        
+        # Pre-activation design: GN → GELU → Conv
+        self.gn1 = nn.GroupNorm(num_groups=num_groups, num_channels=in_channels)
+        self.gelu1 = nn.GELU()
         self.conv1 = nn.Conv2d(
             in_channels, out_channels, 
             kernel_size=3, stride=stride, padding=1, bias=False
         )
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
         
+        self.gn2 = nn.GroupNorm(num_groups=num_groups, num_channels=out_channels)
+        self.gelu2 = nn.GELU()
         self.conv2 = nn.Conv2d(
             out_channels, out_channels, 
             kernel_size=3, stride=1, padding=1, bias=False
         )
-        self.bn2 = nn.BatchNorm2d(out_channels)
+        
+        # Squeeze-and-Excitation block
+        self.se = SEBlock(out_channels, reduction=16)
         
         self.downsample = downsample
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass through the residual block.
+        Forward pass through the pre-activation residual block.
         
         Args:
             x: Input tensor of shape (B, C, H, W)
@@ -65,22 +120,25 @@ class ResidualBlock(nn.Module):
         """
         identity = x
         
-        # First conv block
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
+        # Pre-activation: GN → GELU → Conv
+        out = self.gn1(x)
+        out = self.gelu1(out)
+        out = self.conv1(out)
         
-        # Second conv block
+        # Second pre-activation block
+        out = self.gn2(out)
+        out = self.gelu2(out)
         out = self.conv2(out)
-        out = self.bn2(out)
+        
+        # Squeeze-and-Excitation
+        out = self.se(out)
         
         # Apply downsampling to identity if needed
         if self.downsample is not None:
             identity = self.downsample(x)
         
-        # Add skip connection
+        # Add skip connection (no activation after addition in pre-activation design)
         out += identity
-        out = self.relu(out)
         
         return out
 
@@ -101,7 +159,13 @@ class Model(nn.Module):
         num_blocks: Tuple[int, int, int, int] = (2, 2, 2, 2),
         dropout_rate: float = 0.5,
         task_type: str = 'regression',
-        num_classes: int = 1
+        num_classes: int = 1,
+        activation: str = 'gelu',
+        normalization_type: str = 'group_norm',
+        num_groups: int = 32,
+        se_enabled: bool = True,
+        se_reduction: int = 16,
+        pre_activation: bool = True
     ):
         """
         Initialize the model.
@@ -121,14 +185,15 @@ class Model(nn.Module):
         self.num_classes = num_classes
         
         self.in_channels = base_channels
+        self.num_groups = min(32, base_channels)  # Adjust for small models
         
         # Initial convolution layer
         self.conv1 = nn.Conv2d(
             in_channels, base_channels, 
             kernel_size=7, stride=2, padding=3, bias=False
         )
-        self.bn1 = nn.BatchNorm2d(base_channels)
-        self.relu = nn.ReLU(inplace=True)
+        self.gn1 = nn.GroupNorm(num_groups=self.num_groups, num_channels=base_channels)
+        self.gelu = nn.GELU()
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         
         # ResNet layers with increasing channels: base -> base*2 -> base*4 -> base*8
@@ -145,16 +210,30 @@ class Model(nn.Module):
         # Adaptive pooling to handle variable-width inputs
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        # Task-specific output head
-        self.fc1 = nn.Linear(c4, 128)
-        self.dropout = nn.Dropout(p=dropout_rate)
-
+        # Shared feature extractor (deeper than before)
+        self.shared_fc = nn.Sequential(
+            nn.Linear(c4, 256),
+            nn.GELU(),
+            nn.Dropout(p=dropout_rate),
+            nn.Linear(256, 128),
+            nn.GELU(),
+        )
+        
+        # Task-specific output heads
         if self.task_type == 'regression':
-            # Regression: single output with sigmoid activation
-            self.fc2 = nn.Linear(128, 1)
+            # Regression: deeper head for single output
+            self.task_head = nn.Sequential(
+                nn.Dropout(p=dropout_rate * 0.5),
+                nn.Linear(128, 64),
+                nn.GELU(),
+                nn.Linear(64, 1)
+            )
         else:
-            # Classification: num_classes outputs (no activation, CrossEntropyLoss expects logits)
-            self.fc2 = nn.Linear(128, self.num_classes)
+            # Classification: task-specific head for multi-class output
+            self.task_head = nn.Sequential(
+                nn.Dropout(p=dropout_rate * 0.5),
+                nn.Linear(128, self.num_classes)
+            )
 
         # Initialize weights
         self._initialize_weights()
@@ -186,13 +265,16 @@ class Model(nn.Module):
             if stride != 1:
                 downsample_layers.append(nn.AvgPool2d(kernel_size=2, stride=stride))
             
-            # Always projection with 1x1 Conv (stride 1) + BN
+            # Adjust num_groups for downsampling projection
+            num_groups_proj = min(self.num_groups, out_channels)
+            
+            # Always projection with 1x1 Conv (stride 1) + GN
             downsample_layers.extend([
                 nn.Conv2d(
                     self.in_channels, out_channels, 
                     kernel_size=1, stride=1, bias=False
                 ),
-                nn.BatchNorm2d(out_channels)
+                nn.GroupNorm(num_groups=num_groups_proj, num_channels=out_channels)
             ])
             
             downsample = nn.Sequential(*downsample_layers)
@@ -200,7 +282,7 @@ class Model(nn.Module):
         layers = []
         # First block with potential downsampling
         layers.append(
-            ResidualBlock(self.in_channels, out_channels, stride, downsample)
+            ResidualBlock(self.in_channels, out_channels, stride, downsample, self.num_groups)
         )
         
         # Update in_channels for subsequent blocks
@@ -208,21 +290,23 @@ class Model(nn.Module):
         
         # Add remaining blocks
         for _ in range(1, num_blocks):
-            layers.append(ResidualBlock(out_channels, out_channels))
+            layers.append(ResidualBlock(out_channels, out_channels, num_groups=self.num_groups))
         
         return nn.Sequential(*layers)
     
     def _initialize_weights(self) -> None:
         """
         Initialize model weights using He initialization for conv layers
-        and Xavier for linear layers.
+        and Xavier for linear layers. Updated for GroupNorm.
         """
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                if m.weight is not None:
+                    nn.init.constant_(m.weight, 1)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
                 nn.init.xavier_normal_(m.weight)
                 if m.bias is not None:
@@ -241,8 +325,8 @@ class Model(nn.Module):
         """
         # Initial conv + pooling
         x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
+        x = self.gn1(x)
+        x = self.gelu(x)
         x = self.maxpool(x)
 
         # ResNet layers
@@ -255,11 +339,11 @@ class Model(nn.Module):
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
 
-        # Output head
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.fc2(x)
+        # Shared feature extractor
+        x = self.shared_fc(x)
+        
+        # Task-specific head
+        x = self.task_head(x)
 
         # Task-specific activation
         if self.task_type == 'regression':
@@ -277,7 +361,13 @@ def create_staging_model(
     task_type: str = 'regression',
     num_classes: int = 1,
     base_channels: Optional[int] = None,
-    num_blocks: Optional[Tuple[int, int, int, int]] = None
+    num_blocks: Optional[Tuple[int, int, int, int]] = None,
+    activation: str = 'gelu',
+    normalization_type: str = 'group_norm',
+    num_groups: int = 32,
+    se_enabled: bool = True,
+    se_reduction: int = 16,
+    pre_activation: bool = True
 ) -> Model:
     """
     Factory function to create different model variants.
@@ -291,6 +381,12 @@ def create_staging_model(
         base_channels: Optional override for base channel count/width.
                        If None, derived from model_type defaults.
         num_blocks: Optional override for residual blocks structure.
+        activation: Activation function ('gelu', 'relu', 'mish', 'leaky_relu')
+        normalization_type: Type of normalization ('group_norm' or 'batch_norm')
+        num_groups: Number of groups for GroupNorm (only used if normalization_type='group_norm')
+        se_enabled: Whether to use SE blocks for channel attention
+        se_reduction: Reduction ratio for SE bottleneck
+        pre_activation: Use pre-activation design (True) or post-activation (False)
 
     Returns:
         Initialized Model
@@ -304,7 +400,7 @@ def create_staging_model(
         'tiny':   (32, (1, 1, 1, 1)), # ~700k params
         'small':  (64, (2, 2, 2, 2)), # ~11M params (Standard ResNet18-ish)
         'medium': (64, (3, 4, 6, 3)), # ~25M params (ResNet34-ish)
-        'large':  (64, (3, 4, 23, 3)) # ResNet101-ish depth
+       'large':  (64, (3, 4, 23, 3)) # ResNet101-ish depth
     }
 
     if model_type not in model_configs:
@@ -325,7 +421,13 @@ def create_staging_model(
         num_blocks=final_blocks,
         dropout_rate=dropout_rate,
         task_type=task_type,
-        num_classes=num_classes
+        num_classes=num_classes,
+        activation=activation,
+        normalization_type=normalization_type,
+        num_groups=num_groups,
+        se_enabled=se_enabled,
+        se_reduction=se_reduction,
+        pre_activation=pre_activation
     )
 
 
