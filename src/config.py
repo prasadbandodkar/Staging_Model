@@ -122,6 +122,40 @@ class DataConfig:
             return self.cross_section
 
 @dataclass
+class NormalizationConfig:
+    """
+    Normalization layer configuration.
+    
+    Attributes:
+        type: Type of normalization ('group_norm' or 'batch_norm')
+        num_groups: Number of groups for GroupNorm (only used if type='group_norm')
+    """
+    type: Literal['group_norm', 'batch_norm']
+    num_groups: int = 32
+
+@dataclass
+class SEBlockConfig:
+    """
+    Squeeze-and-Excitation block configuration.
+    
+    Attributes:
+        enabled: Whether to use SE blocks for channel attention
+        reduction: Reduction ratio for the SE bottleneck (higher = fewer params)
+    """
+    enabled: bool
+    reduction: int = 16
+
+@dataclass
+class ResidualBlockConfig:
+    """
+    Residual block design configuration.
+    
+    Attributes:
+        pre_activation: Use pre-activation design (BN→Activation→Conv) vs post-activation
+    """
+    pre_activation: bool
+
+@dataclass
 class ModelConfig:
     """
     Model architecture configuration.
@@ -131,10 +165,18 @@ class ModelConfig:
                      Options: 'nano', 'tiny', 'small', 'medium', 'large'
         dropout: Dropout rate for regularization (0.0 to 1.0)
         show_summary: Whether to print a model summary at startup
+        activation: Activation function to use ('gelu', 'relu', 'mish', 'leaky_relu')
+        normalization: Normalization layer configuration
+        se_block: Squeeze-and-Excitation block configuration
+        residual_block: Residual block design configuration
     """
     architecture: str
     dropout: float
     show_summary: bool
+    activation: Literal['gelu', 'relu', 'mish', 'leaky_relu'] = 'gelu'
+    normalization: NormalizationConfig = field(default_factory=lambda: NormalizationConfig(type='group_norm', num_groups=32))
+    se_block: SEBlockConfig = field(default_factory=lambda: SEBlockConfig(enabled=True, reduction=16))
+    residual_block: ResidualBlockConfig = field(default_factory=lambda: ResidualBlockConfig(pre_activation=True))
 
 @dataclass
 class RunsConfig:
@@ -166,16 +208,27 @@ class LossConfig:
     huber_delta: float
 
 @dataclass
+class DropoutScheduleConfig:
+    """Dropout schedule configuration."""
+    type: str  # constant, linear, step
+    dropout_start: float = 0.5
+    dropout_end: float = 0.5
+    step_epochs: List[int] = field(default_factory=list)
+    step_values: List[float] = field(default_factory=list)
+
+@dataclass
 class SchedulerConfig:
     """Learning rate scheduler configuration."""
     type: str
     factor: float
     patience: int
+    warmup_epochs: int = 0
 
 @dataclass
 class RegularizationConfig:
     """Regularization configuration."""
     grad_clip: float
+    dropout_schedule: DropoutScheduleConfig
 
 @dataclass
 class TrainingConfig:
@@ -249,12 +302,23 @@ class AppConfig:
                 loading=DataLoading(**d['data']['loading']),
                 unroll_on_fly=UnrollOnFlyConfig(**d['data']['unroll_on_fly'])
             ),
-            model=ModelConfig(**d['model']),
+            model=ModelConfig(
+                architecture=d['model']['architecture'],
+                dropout=d['model']['dropout'],
+                show_summary=d['model']['show_summary'],
+                activation=d['model'].get('activation', 'gelu'),
+                normalization=NormalizationConfig(**d['model'].get('normalization', {'type': 'group_norm', 'num_groups': 32})),
+                se_block=SEBlockConfig(**d['model'].get('se_block', {'enabled': True, 'reduction': 16})),
+                residual_block=ResidualBlockConfig(**d['model'].get('residual_block', {'pre_activation': True}))
+            ),
             training=TrainingConfig(
                 optimizer=OptimizerConfig(**d['training']['optimizer']),
                 loss=LossConfig(**d['training']['loss']),
                 scheduler=SchedulerConfig(**d['training']['scheduler']),
-                regularization=RegularizationConfig(**d['training']['regularization']),
+                regularization=RegularizationConfig(
+                    grad_clip=d['training']['regularization']['grad_clip'],
+                    dropout_schedule=DropoutScheduleConfig(**d['training']['regularization']['dropout_schedule'])
+                ),
                 batch_size=d['training']['batch_size'],
                 epochs=d['training']['epochs'],
                 early_stopping=d['training']['early_stopping'],

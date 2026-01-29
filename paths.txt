@@ -1,0 +1,2 @@
+local_path=/Volumes/X2/Projects/phd/staging/Staging_Model
+remote_path=/scratch/user/prasad.bandodkar/staging/Staging_Model

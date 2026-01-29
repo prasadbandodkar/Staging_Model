@@ -10,7 +10,7 @@ import sys
 import json
 import random
 from pathlib import Path
-from typing import Dict, Tuple, Optional, List, Union
+from typing import Dict, Tuple, Optional, List, Union, TextIO
 from datetime import datetime
 from dataclasses import asdict
 
@@ -27,6 +27,49 @@ from .model import Model, create_staging_model, get_model_summary
 from .torchdataset import TorchDataset
 from .config import AppConfig, TrainingConfig, DataConfig, ModelConfig
 from .run_manager import RunManager
+
+
+
+class DualLogger:
+    """
+    Logger that writes to both console and a file simultaneously.
+    
+    Redirects stdout to write to both destinations, ensuring all print
+    statements are captured in the log file.
+    """
+    
+    def __init__(self, log_path: Path):
+        """
+        Initialize dual logger.
+        
+        Args:
+            log_path: Path to log file
+        """
+        self.terminal = sys.stdout
+        self.log_file = open(log_path, 'a')
+        
+    def write(self, message: str):
+        """Write message to both terminal and file."""
+        self.terminal.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()
+        
+    def flush(self):
+        """Flush both outputs."""
+        self.terminal.flush()
+        self.log_file.flush()
+        
+    def close(self):
+        """Close the log file."""
+        self.log_file.close()
+        
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
 
 
 
@@ -162,13 +205,26 @@ class Trainer:
             weight_decay=config.optimizer.weight_decay
         )
 
-        # Learning rate scheduler
+        # Learning rate scheduler with warmup support
+        self.warmup_epochs = config.scheduler.warmup_epochs
+        self.base_lr = config.optimizer.learning_rate
+        
+        # Main scheduler (ReduceLROnPlateau)
         self.scheduler = ReduceLROnPlateau(
             self.optimizer,
             mode='min',
             factor=config.scheduler.factor,
             patience=config.scheduler.patience
         )
+        
+        # Dropout schedule configuration
+        self.dropout_config = config.regularization.dropout_schedule
+        self.initial_dropout = self._get_dropout_rate(0)  # Store initial dropout
+        
+        # Set initial dropout rate
+        if hasattr(self.model, 'dropout') and hasattr(self.model.dropout, 'p'):
+            self.model.dropout.p = self.initial_dropout
+            print(f"Initial dropout rate: {self.initial_dropout:.3f}")
 
         # Training state
         self.current_epoch = 0
@@ -231,6 +287,78 @@ class Trainer:
             return nn.HuberLoss(delta=self.config.loss.huber_delta)
         else:
             raise ValueError(f"Unknown loss type: {loss_type}")
+    
+    def _get_dropout_rate(self, epoch: int) -> float:
+        """
+        Calculate dropout rate for the given epoch based on schedule.
+        
+        Args:
+            epoch: Current training epoch
+            
+        Returns:
+            Dropout rate for this epoch
+        """
+        schedule_type = self.dropout_config.type
+        
+        if schedule_type == 'constant':
+            # Use the model's configured dropout (from config.model.dropout)
+            return self.model.dropout.p if hasattr(self.model, 'dropout') else 0.5
+        
+        elif schedule_type == 'linear':
+            # Linearly interpolate between start and end
+            start = self.dropout_config.dropout_start
+            end = self.dropout_config.dropout_end
+            total_epochs = self.config.epochs
+            
+            # Linear interpolation
+            progress = min(epoch / max(total_epochs - 1, 1), 1.0)
+            return start + (end - start) * progress
+        
+        elif schedule_type == 'step':
+            # Step schedule: increase at specific epochs
+            step_epochs = self.dropout_config.step_epochs
+            step_values = self.dropout_config.step_values
+            
+            # Find appropriate dropout value
+            dropout_rate = step_values[0]  # Default to first value
+            for i, step_epoch in enumerate(step_epochs):
+                if epoch >= step_epoch and i + 1 < len(step_values):
+                    dropout_rate = step_values[i + 1]
+            
+            return dropout_rate
+        
+        else:
+            print(f"Warning: Unknown dropout schedule type '{schedule_type}', using constant")
+            return 0.5
+    
+    def _update_dropout(self, epoch: int):
+        """
+        Update model's dropout rate based on the current epoch.
+        
+        Args:
+            epoch: Current training epoch
+        """
+        new_dropout = self._get_dropout_rate(epoch)
+        
+        if hasattr(self.model, 'dropout') and hasattr(self.model.dropout, 'p'):
+            if abs(self.model.dropout.p - new_dropout) > 1e-6:
+                self.model.dropout.p = new_dropout
+                print(f"Updated dropout rate to: {new_dropout:.3f}")
+    
+    def _apply_warmup(self, epoch: int):
+        """
+        Apply learning rate warmup for the first few epochs.
+        
+        Args:
+            epoch: Current training epoch (0-indexed)
+        """
+        if self.warmup_epochs > 0 and epoch < self.warmup_epochs:
+            # Linear warmup
+            warmup_factor = (epoch + 1) / self.warmup_epochs
+            lr = self.base_lr * warmup_factor
+            
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr
     
     def train_epoch(self) -> Dict[str, float]:
         """
@@ -409,7 +537,21 @@ class Trainer:
                 # Handle regularization config
                 if 'regularization' in loaded_config:
                     if isinstance(loaded_config['regularization'], dict):
-                        config_dict['regularization'] = RegularizationConfig(**loaded_config['regularization'])
+                        from .config import DropoutScheduleConfig
+                        
+                        reg_config = loaded_config['regularization']
+                        
+                        # Handle dropout_schedule sub-config
+                        if 'dropout_schedule' in reg_config and isinstance(reg_config['dropout_schedule'], dict):
+                            dropout_schedule = DropoutScheduleConfig(**reg_config['dropout_schedule'])
+                        else:
+                            # Old checkpoint without dropout_schedule - use constant with grad_clip value
+                            dropout_schedule = DropoutScheduleConfig(type='constant', dropout_start=0.5, dropout_end=0.5)
+                        
+                        config_dict['regularization'] = RegularizationConfig(
+                            grad_clip=reg_config.get('grad_clip', 0.0),
+                            dropout_schedule=dropout_schedule
+                        )
                     else:
                         config_dict['regularization'] = loaded_config['regularization']
                 
@@ -448,14 +590,22 @@ class Trainer:
         for epoch in range(num_epochs):
             self.current_epoch = epoch
             
+            # Apply learning rate warmup
+            self._apply_warmup(epoch)
+            
+            # Update dropout schedule
+            self._update_dropout(epoch)
+            
             # Train
             train_metrics = self.train_epoch()
             
             # Validate
             val_metrics = self.validate()
             
-            # Update scheduler
-            self.scheduler.step(val_metrics['loss'])
+            # Update scheduler (only after warmup)
+            if epoch >= self.warmup_epochs:
+                self.scheduler.step(val_metrics['loss'])
+            
             current_lr = self.optimizer.param_groups[0]['lr']
             
             # Update history
@@ -733,79 +883,109 @@ def train_model(cfg: AppConfig, resume_from: str = None, run_name: str = None):
     else:
         run_dir = run_manager.create_run(run_name)
     
-    # Save config snapshot
-    if cfg.runs.save_config:
-        run_manager.save_config(cfg)
+    # Set up logging to file
+    log_path = run_dir / 'training.log'
+    dual_logger = DualLogger(log_path)
+    original_stdout = sys.stdout
+    sys.stdout = dual_logger
     
-    # Set random seed
-    set_seed(cfg.system.seed)
-
-    # Get device
-    device = get_device(cfg.system.device)
-    print(f"Using device: {device}")
-    print(f"Task type: {cfg.task.type}")
-    if cfg.task.type == 'classification':
-        print(f"Number of classes: {cfg.task.classification.num_classes}")
-    print("\nConfiguration loaded from config.yml")
-
-    # Create dataloaders
-    train_loader, val_loader, train_dataset, val_dataset = create_dataloaders(cfg, device)
-
-    # Create model
-    print("\nCreating model...")
-    model = create_staging_model(
-        model_type=cfg.model.architecture,
-        in_channels=1,
-        dropout_rate=cfg.model.dropout,
-        task_type=cfg.task.type,
-        num_classes=cfg.task.classification.num_classes
-    )
-
-    # Print model summary if requested
-    if cfg.model.show_summary:
-        # Load a sample image to determine actual input dimensions
-        print("\nDetermining input dimensions from sample image...")
+    try:
+        # Save config snapshot
+        if cfg.runs.save_config:
+            run_manager.save_config(cfg)
         
-        # Get one sample image from the already-created train_dataset
-        sample_image, _, _ = train_dataset[0]
+        # Set random seed
+        set_seed(cfg.system.seed)
+
+        # Get device
+        device = get_device(cfg.system.device)
+        print(f"Using device: {device}")
+        print(f"Task type: {cfg.task.type}")
+        if cfg.task.type == 'classification':
+            print(f"Number of classes: {cfg.task.classification.num_classes}")
+        print("\nConfiguration loaded from config.yml")
         
-        # Extract dimensions: (C, H, W)
-        _, img_height, img_width = sample_image.shape
+        # Print data split information
+        print("\nData Split Configuration:")
+        print(f"  Test IDs:   {cfg.data.splits.test_ids}")
+        print(f"  Val IDs:    {cfg.data.splits.val_ids}")
+        print(f"  Ignore IDs: {cfg.data.splits.ignore_ids}")
+
+        # Create dataloaders
+        train_loader, val_loader, train_dataset, val_dataset = create_dataloaders(cfg, device)
         
-        print(f"  Actual input dimensions: {img_height}×{img_width}")
-        
-        get_model_summary(
-            model,
-            (cfg.training.batch_size, 1, img_height, img_width)
+        # Print train IDs (extract from train_dataset)
+        print("\nTraining Folder IDs:")
+        train_ids = sorted([train_dataset.get_folder_number(folder) for folder in train_dataset.train_data.keys()])
+        print(f"  Train IDs: {train_ids}")
+
+        # Create model
+        print("\nCreating model...")
+        model = create_staging_model(
+            model_type=cfg.model.architecture,
+            in_channels=1,
+            dropout_rate=cfg.model.dropout,
+            task_type=cfg.task.type,
+            num_classes=cfg.task.classification.num_classes,
+            activation=cfg.model.activation,
+            normalization_type=cfg.model.normalization.type,
+            num_groups=cfg.model.normalization.num_groups,
+            se_enabled=cfg.model.se_block.enabled,
+            se_reduction=cfg.model.se_block.reduction,
+            pre_activation=cfg.model.residual_block.pre_activation
         )
 
-    # Update training config to use run-specific checkpoint directory
-    cfg.training.checkpoint_dir = str(run_manager.get_checkpoint_dir())
+        # Print model summary if requested
+        if cfg.model.show_summary:
+            # Load a sample image to determine actual input dimensions
+            print("\nDetermining input dimensions from sample image...")
+            
+            # Get one sample image from the already-created train_dataset
+            sample_image, _, _ = train_dataset[0]
+            
+            # Extract dimensions: (C, H, W)
+            _, img_height, img_width = sample_image.shape
+            
+            print(f"  Actual input dimensions: {img_height}×{img_width}")
+            
+            get_model_summary(
+                model,
+                (cfg.training.batch_size, 1, img_height, img_width)
+            )
 
-    # Initialize TensorBoard logger if enabled
-    logger = None
-    if cfg.runs.tensorboard_enabled:
-        from .tensorboard import TensorBoardLogger
-        logger = TensorBoardLogger(
-            log_dir=str(run_manager.get_logs_dir()),
-            enabled=True
+        # Update training config to use run-specific checkpoint directory
+        cfg.training.checkpoint_dir = str(run_manager.get_checkpoint_dir())
+
+        # Initialize TensorBoard logger if enabled
+        logger = None
+        if cfg.runs.tensorboard_enabled:
+            from .tensorboard import TensorBoardLogger
+            logger = TensorBoardLogger(
+                log_dir=str(run_manager.get_logs_dir()),
+                enabled=True
+            )
+
+        # Create trainer
+        trainer = Trainer(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            config=cfg.training,
+            device=device,
+            task_type=cfg.task.type,
+            logger=logger
         )
-
-    # Create trainer
-    trainer = Trainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        config=cfg.training,
-        device=device,
-        task_type=cfg.task.type,
-        logger=logger
-    )
-    
-    # Resume from checkpoint if specified
-    if resume_from:
-        print(f"\nResuming training from checkpoint: {resume_from}")
-        trainer.load_checkpoint(resume_from)
-    
-    # Train
-    trainer.train(num_epochs=cfg.training.epochs)
+        
+        # Resume from checkpoint if specified
+        if resume_from:
+            print(f"\nResuming training from checkpoint: {resume_from}")
+            trainer.load_checkpoint(resume_from)
+        
+        # Train
+        trainer.train(num_epochs=cfg.training.epochs)
+        
+    finally:
+        # Restore original stdout and close logger
+        sys.stdout = original_stdout
+        dual_logger.close()
+        print(f"\nTraining log saved to: {log_path}")
