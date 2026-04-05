@@ -97,7 +97,7 @@ data:
 # MODEL CONFIGURATION
 # ==============================================================================
 model:
-  architecture: "tiny"  # Options: nano, tiny, small, medium, large
+  architecture: "small"  # Options: nano, tiny, small, medium, large
                          # nano:   <150k params
                          # tiny:   ~700k params
                          # small:  ~11M params (ResNet18-like)
