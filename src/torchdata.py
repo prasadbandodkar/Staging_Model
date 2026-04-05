@@ -28,8 +28,7 @@ class TorchData(Data):
         folder: str, 
         idx: int, 
         list_type: ListType, 
-        device: str = 'cpu',
-        target_size: Optional[Tuple[int, int]] = None
+        device: str = 'cpu'
     ) -> Tuple[torch.Tensor, float]:
         """
         Load a raw image from disk as a PyTorch tensor, optionally directly to GPU.
@@ -82,21 +81,10 @@ class TorchData(Data):
             I_tensor = torchvision.io.read_image(filename, mode=torchvision.io.ImageReadMode.GRAY)
             
             # Convert to float32 and normalize to [0, 1]
-            I_tensor = I_tensor.float() / 255.0
+            # I_tensor = I_tensor.float() / 255.0
             
             # Move to specified device
             I_tensor = I_tensor.to(device)
-            
-            # Resize if target_size is specified
-            if target_size is not None:
-                # Use torchvision's functional resize for better quality and cleaner code
-                # antialias=True provides better quality especially for downsampling
-                I_tensor = torchvision.transforms.functional.resize(
-                    I_tensor,
-                    size=target_size,  # (height, width)
-                    interpolation=torchvision.transforms.functional.InterpolationMode.BILINEAR,
-                    antialias=True
-                )
             
         except Exception as e:
             raise FileNotFoundError(f"Image '{filename}' could not be loaded as tensor: {e}")

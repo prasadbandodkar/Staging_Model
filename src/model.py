@@ -28,11 +28,12 @@ class SEBlock(nn.Module):
             reduction: Reduction ratio for the bottleneck (default: 16)
         """
         super(SEBlock, self).__init__()
+        reduced = max(1, channels // reduction)
         self.squeeze = nn.AdaptiveAvgPool2d(1)
         self.excitation = nn.Sequential(
-            nn.Linear(channels, channels // reduction, bias=False),
+            nn.Linear(channels, reduced, bias=False),
             nn.ReLU(inplace=True),
-            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Linear(reduced, channels, bias=False),
             nn.Sigmoid()
         )
     

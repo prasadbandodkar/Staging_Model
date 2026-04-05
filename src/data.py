@@ -124,6 +124,8 @@ class Data:
             df = df.sort_values(by=1)  # type: ignore       # unfortunately the csv file is not sorted. We need to sort it here.
             # add self.data_path to the file name - the first column
             df[0] = df[0].apply(lambda x: os.path.join(self.data_path, x))
+            # Exclude augmented files (filenames containing "aug") from all splits
+            df = df[~df[0].apply(lambda x: 'aug' in os.path.basename(x))].reset_index(drop=True)
             data[folder] = df
         return data
     

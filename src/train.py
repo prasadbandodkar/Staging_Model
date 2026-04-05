@@ -735,36 +735,15 @@ def set_seed(seed: int):
 
 
 def get_device(device_config: str = 'auto') -> torch.device:
-    """
-    Get the device based on configuration.
-
-    Args:
-        device_config: Device configuration ('auto', 'cpu', 'cuda', or 'mps')
-
-    Returns:
-        torch.device object
-    """
+    """Get the device based on configuration."""
     if device_config == 'cpu':
         return torch.device('cpu')
-    elif device_config == 'cuda':
-        if not torch.cuda.is_available():
-            print("Warning: CUDA requested but not available. Using CPU.")
-            return torch.device('cpu')
+    elif device_config == 'cuda' and torch.cuda.is_available():
         return torch.device('cuda')
-    elif device_config == 'mps':
-        if not torch.backends.mps.is_available():
-            print("Warning: MPS requested but not available. Using CPU.")
-            return torch.device('cpu')
+    elif device_config == 'mps' and torch.backends.mps.is_available():
         return torch.device('mps')
-    elif device_config == 'auto':
-        if torch.cuda.is_available():
-            return torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            return torch.device('mps')
-        else:
-            return torch.device('cpu')
     else:
-        raise ValueError(f"Unknown device config: {device_config}. Choose from: auto, cpu, cuda, mps")
+        raise ValueError(f"Unknown device config: {device_config}. Choose from: cpu, cuda, mps")
 
 
 
@@ -837,7 +816,7 @@ def create_dataloaders(cfg: AppConfig, device: torch.device):
         batch_size=cfg.training.batch_size,
         shuffle=True,
         num_workers=cfg.data.loading.num_workers,
-        pin_memory=True if device.type in ['cuda', 'mps'] else False
+        pin_memory=True if device.type == 'cuda' else False  # MPS does not support pin_memory
     )
 
     val_loader = torch.utils.data.DataLoader(
@@ -845,7 +824,7 @@ def create_dataloaders(cfg: AppConfig, device: torch.device):
         batch_size=cfg.training.batch_size,
         shuffle=False,
         num_workers=cfg.data.loading.num_workers,
-        pin_memory=True if device.type in ['cuda', 'mps'] else False
+        pin_memory=True if device.type == 'cuda' else False  # MPS does not support pin_memory
     )
 
     return train_loader, val_loader, train_dataset, val_dataset

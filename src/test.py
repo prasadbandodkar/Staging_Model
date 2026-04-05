@@ -240,26 +240,37 @@ def _test_regression(cfg: AppConfig, predictions: np.ndarray, targets: np.ndarra
     colormap = cm.get_cmap('tab10' if num_folders <= 10 else 'tab20')
     folder_colors = {fid: colormap(i / max(num_folders - 1, 1)) for i, fid in enumerate(unique_folders)}
     
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    
-    # Plot 1: Predictions vs Targets by image number (color-coded by folder)
-    image_numbers = np.arange(len(predictions))
-    ax1 = axes[0, 0]
-    for fid in unique_folders:
+    # Layout: per-folder scatter plots fill the top rows (4 per row),
+    # then the 3 summary plots occupy the final row.
+    ncols = 4
+    nrows_folders = (num_folders + ncols - 1) // ncols
+    nrows_total = nrows_folders + 1
+
+    fig = plt.figure(figsize=(5 * ncols, 5 * nrows_total))
+    gs = fig.add_gridspec(nrows_total, ncols, hspace=0.5, wspace=0.35)
+
+    # Per-folder prediction vs ground truth scatter plots
+    for i, fid in enumerate(unique_folders):
+        ax = fig.add_subplot(gs[i // ncols, i % ncols])
         mask = folder_ids == fid
-        ax1.scatter(image_numbers[mask], targets[mask], alpha=0.6, s=30, 
-                   label=f'Folder {int(fid)} (GT)', color=folder_colors[fid], marker='o')
-        ax1.scatter(image_numbers[mask], predictions[mask], alpha=0.6, s=30, 
-                   label=f'Folder {int(fid)} (Pred)', color=folder_colors[fid], marker='x')
-    ax1.set_xlabel('Image Number', fontsize=12)
-    ax1.set_ylabel('Staging Value', fontsize=12)
-    ax1.set_title('Predictions vs Ground Truth by Image\n(Color-coded by Folder ID)', 
-                 fontsize=14, fontweight='bold')
-    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Scatter plot - Predictions vs Targets (color-coded by folder)
-    ax2 = axes[0, 1]
+        ax.scatter(targets[mask], predictions[mask], alpha=0.7, s=20,
+                   color=folder_colors[fid], edgecolors='black', linewidth=0.4)
+        lo = min(targets[mask].min(), predictions[mask].min())
+        hi = max(targets[mask].max(), predictions[mask].max())
+        ax.plot([lo, hi], [lo, hi], 'r--', linewidth=1.2)
+        folder_mae = np.mean(np.abs(predictions[mask] - targets[mask]))
+        ax.set_title(f'Folder {int(fid)}\nMAE={folder_mae:.3f}', fontsize=10, fontweight='bold')
+        ax.set_xlabel('Ground Truth', fontsize=9)
+        ax.set_ylabel('Prediction', fontsize=9)
+        ax.tick_params(labelsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect('equal', adjustable='box')
+    # Hide unused cells in folder rows
+    for i in range(num_folders, nrows_folders * ncols):
+        fig.add_subplot(gs[i // ncols, i % ncols]).axis('off')
+
+    # Summary row: Plot 2 — combined scatter
+    ax2 = fig.add_subplot(gs[nrows_folders, 0])
     
     # Define distinct markers for each folder
     markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h']
@@ -282,23 +293,23 @@ def _test_regression(cfg: AppConfig, predictions: np.ndarray, targets: np.ndarra
     ax2.grid(True, alpha=0.3)
     ax2.set_aspect('equal', adjustable='box')
     
-    # Plot 3: Residuals by image number (color-coded by folder)
-    ax3 = axes[1, 0]
+    # Plot 3: Residuals vs ground truth (all folders combined)
+    ax3 = fig.add_subplot(gs[nrows_folders, 1])
     residuals = predictions - targets
     for fid in unique_folders:
         mask = folder_ids == fid
-        ax3.scatter(image_numbers[mask], residuals[mask], alpha=0.6, s=30, 
-                   label=f'Folder {int(fid)}', color=folder_colors[fid])
+        ax3.scatter(targets[mask], residuals[mask], alpha=0.6, s=30,
+                   label=f'Folder {int(fid)}', color=folder_colors[fid],
+                   edgecolors='black', linewidth=0.3)
     ax3.axhline(y=0, color='r', linestyle='--', linewidth=2)
-    ax3.set_xlabel('Image Number', fontsize=12)
+    ax3.set_xlabel('Ground Truth', fontsize=12)
     ax3.set_ylabel('Residual (Prediction - Target)', fontsize=12)
-    ax3.set_title('Prediction Residuals by Image\n(Color-coded by Folder ID)', 
-                 fontsize=14, fontweight='bold')
+    ax3.set_title('Residuals vs Ground Truth\n(Color-coded by Folder ID)', fontsize=14, fontweight='bold')
     ax3.legend(fontsize=9)
     ax3.grid(True, alpha=0.3)
     
     # Plot 4: Histogram of residuals (side-by-side bars by folder)
-    ax4 = axes[1, 1]
+    ax4 = fig.add_subplot(gs[nrows_folders, 2])
     
     # Determine bin edges for consistency across all folders
     all_residuals_min = residuals.min()
@@ -332,12 +343,13 @@ def _test_regression(cfg: AppConfig, predictions: np.ndarray, targets: np.ndarra
     ax4.legend(fontsize=9)
     ax4.grid(True, alpha=0.3, axis='y')
     
+    # Hide unused 4th cell in summary row
+    fig.add_subplot(gs[nrows_folders, 3]).axis('off')
+
     # Add overall metrics
     metrics_text = f'MAE: {mae:.4f} | MSE: {mse:.4f} | R²: {r2:.4f}'
     fig.suptitle(f'Regression Test Results\n{metrics_text}', 
                  fontsize=16, fontweight='bold', y=0.995)
-    
-    plt.tight_layout(rect=[0, 0, 1, 0.98])
     
     # Save the plot
     checkpoint_dir = Path(checkpoint_path).parent

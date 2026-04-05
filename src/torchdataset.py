@@ -211,9 +211,6 @@ class TorchDataset(TorchData, Dataset):
         self.list_type = list_type
         self.data = list_dict[list_type]
         self.indices = [(folder, idx) for folder, df in self.data.items() for idx in range(len(df.index) - 1)]
-        if list_type == 'train':
-            random.shuffle(self.indices)
-            # self.indices = [self.indices[i] for i in torch.randperm(len(self.indices))]
 
     def __len__(self) -> int:
         """
@@ -252,19 +249,17 @@ class TorchDataset(TorchData, Dataset):
         folder_id = self.get_folder_number(folder)
 
         if not self.use_unroll_on_fly:
-            # GPU-accelerated path: Load pre-processed image directly as tensor on GPU
-            # Check cache first if caching is enabled
+            # Pre-processed path: load image as CPU tensor, transfer to device in training loop
             cache_key = (folder, idx)
-            
+
             if self.cache_in_memory and cache_key in self._cache:
                 # Cache hit! Retrieve from memory
                 I_tensor, id_value = self._cache[cache_key]
                 self._cache_hits += 1
             else:
                 # Cache miss - load from disk
-                target_size = self.size if self.size else None
                 I_tensor, id_value = self.get_raw_image_torch(
-                    folder, idx, self.list_type, 
+                    folder, idx, self.list_type,
                     device=self.device
                 )
                 self._cache_misses += 1
@@ -274,28 +269,21 @@ class TorchDataset(TorchData, Dataset):
                     # Cache the loaded tensor (already on correct device and resized)
                     self._cache[cache_key] = (I_tensor.clone(), id_value)
             
-            # Create TorchImage from the GPU tensor
-            # skip_normalization=True because get_raw_image_torch already normalizes to [0,1]
             image = TorchImage(I_tensor, id_value, device=self.device, skip_normalization=True)
 
-            # Apply truncation if needed using GPU operations
+            # Apply truncation if needed
             if self.trunc_width is not None and image.I.shape[2] > self.trunc_width:
                 max_start = image.I.shape[2] - self.trunc_width
                 if self.list_type == 'train':
-                    # Random crop for training (on GPU)
-                    start = torch.randint(0, max_start + 1, (1,), device=self.device).item() if max_start > 0 else 0
+                    start = torch.randint(0, max_start + 1, (1,)).item() if max_start > 0 else 0
                 else:
-                    # Center crop for validation/test
                     start = max_start // 2
-                # Crop using tensor slicing (stays on GPU)
                 image.I = image.I[:, :, start:start + self.trunc_width]
 
-            # Apply GPU-accelerated augmentation for training data
             if self.list_type == 'train':
-                image.I = image.augment()  # Uses pure PyTorch GPU operations
-            
-            # Apply GPU-accelerated normalization for training data
-            image.I = image.normalize()  # Uses pure PyTorch GPU operations
+                image.I = image.augment()
+
+            image.I = image.normalize()
 
             # Convert target based on task type
             if self.task_type == 'classification':

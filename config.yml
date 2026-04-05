@@ -27,14 +27,14 @@ task:
 data:
   # --- Paths ---
   paths:
-    root: "/Volumes/X2/Projects/phd/staging/data/live_data_augmented0/"
+    root: "/Volumes/X2/Projects/phd/staging/data/live_data_unrolled20x/"
     metadata: "/Volumes/X2/Projects/phd/staging/Staging_Model/metadata.csv"
 
   # --- Dataset Splits ---
   splits:
-    test_ids: []
-    val_ids: [7, 33, 40]
-    ignore_ids: [20, 21, 22, 23, 24, 25, 27, 26, 31]
+    test_ids: [20, 42]
+    val_ids: [33, 40]
+    ignore_ids: [31]
     # train_ids are automatically determined (all folders not in test/val/ignore)
 
   # --- Image Type ---
@@ -53,7 +53,7 @@ data:
                       # Training: random crop, Validation: center crop
                       # Set to null to disable truncation
 
-    num_workers: 6  # Number of dataloader workers (0 = single-threaded)
+    num_workers: 6  # MPS requires 0 (no subprocesses); use 4-8 only on CUDA/CPU
 
   # --- Unroll On-The-Fly Configuration ---
   # Used only when loading.use_unroll_on_fly=true
@@ -97,7 +97,7 @@ data:
 # MODEL CONFIGURATION
 # ==============================================================================
 model:
-  architecture: "small"  # Options: nano, tiny, small, medium, large
+  architecture: "tiny"  # Options: nano, tiny, small, medium, large
                          # nano:   <150k params
                          # tiny:   ~700k params
                          # small:  ~11M params (ResNet18-like)
@@ -184,7 +184,7 @@ training:
       step_values: [0.3, 0.5, 0.6, 0.7]  # Dropout values at each step
 
   # --- Training Duration --- 
-  batch_size: 256
+  batch_size: 64
   epochs: 100
   early_stopping: 100  # Stop if no improvement for N epochs (0 = disabled)
 
